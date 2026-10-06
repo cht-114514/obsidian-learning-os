@@ -1,5 +1,6 @@
 import { renderWorkRun } from './work-run.js';
 import { renderMessageBody } from './message-body.js';
+import { formatManifest } from '../single-session.js';
 import { formatRelativeTime, textOfMessage } from './turns.js';
 import { parseApplyResponse } from '../intent.js';
 
@@ -84,6 +85,14 @@ export function mountChatPane(el, deps) {
     const discard = pending.createEl('button', { text: '忽略', attr: { type: 'button' } });
     discard.onclick = () => deps.onPendingAction?.(message, 'discard');
     const note = msg.createDiv({ cls: 'aos-pending-note' });
+    let manifest = null;
+    let manifestBody = null;
+    if (role === 'assistant') {
+      manifest = msg.createEl('details', { cls: 'aos-manifest' });
+      manifest.createEl('summary', { text: '本次参考了什么' });
+      manifestBody = manifest.createDiv({ cls: 'aos-manifest-body' });
+      manifest.hidden = true;
+    }
     const applyRow = role === 'assistant' ? actions.createDiv({ cls: 'aos-apply-actions' }) : null;
     time.onclick = () => foot.toggleClass('is-open', !foot.hasClass('is-open'));
     const node = {
@@ -95,6 +104,8 @@ export function mountChatPane(el, deps) {
       regen,
       pending,
       note,
+      manifest,
+      manifestBody,
       applyRow,
       text: '',
       done: false,
@@ -150,6 +161,11 @@ export function mountChatPane(el, deps) {
         message.errorHint ||
           (turnStatus === 'unknown' ? '这条消息可能已经发出，但没拿到回执。先检查结果，确认没有执行过再重试。' : '')
       );
+    }
+    if (node.manifest) {
+      const detail = formatManifest(message.manifest);
+      node.manifest.hidden = !detail;
+      if (node.manifestBody) node.manifestBody.setText(detail);
     }
     const text = message.text || '';
     if (role === 'user') {

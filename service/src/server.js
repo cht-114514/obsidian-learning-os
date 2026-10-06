@@ -18,6 +18,7 @@ import { createRateLimiter } from './rate-limit.js';
 import { createApi } from './api.js';
 import { createVault } from './vault.js';
 import { createConfirmations } from './confirmations.js';
+import { processMemoryJob } from './memory/worker.js';
 
 export const SERVICE_VERSION = '0.4.0';
 
@@ -37,6 +38,61 @@ export async function startService(overrides = {}) {
   const vault = createVault({ root: config.vaultPath });
   const confirmations = createConfirmations({});
   const api = createApi({ store, engine, gateway, devices, logger, config, rateLimit, vault, confirmations });
+
+  let memoryStopped = false;
+  async function writeAgentFile(rel, text) {
+    if (!vault.enabled) throw new Error('vault 不可用');
+    try {
+      const current = vault.readNote(rel);
+      await vault.writeNote(rel, text, { expectFingerprint: current.fingerprint });
+    } catch (error) {
+      if (error?.code === 'NOT_FOUND' || /找不到|ENOENT/.test(String(error?.message || ''))) {
+        await vault.writeNote(rel, text, {});
+        return;
+      }
+      throw error;
+    }
+  }
+  async function pumpMemory() {
+    while (!memoryStopped) {
+      const job = store.claimNextMemoryJob();
+      if (!job) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
+      try {
+        await processMemoryJob(store, job, {
+          writeText: writeAgentFile,
+          readText: async (rel) => {
+            try {
+              return vault.readNote(rel).content;
+            } catch {
+              return null;
+            }
+          },
+          form: async ({ messages }) => {
+            const { callFormationLlm } = await import('../../plugin/src/memory/formation-llm.js');
+            const result = await callFormationLlm({
+              baseUrl: process.env.AOS_MEMORY_BASE_URL || '',
+              apiKey: process.env.AOS_MEMORY_API_KEY || '',
+              model: process.env.AOS_MEMORY_MODEL || 'qwen3.7-flash',
+              bufferTurns: [],
+              userText: messages.filter((row) => row.role === 'user').map((row) => row.text).join('\n'),
+              assistantText: messages.filter((row) => row.role === 'assistant').map((row) => row.text).join('\n'),
+              forceClose: true,
+            });
+            if (result.skipped || !result.ok) {
+              throw new Error(result.reason || result.error || 'formation failed');
+            }
+            return result.result;
+          },
+        });
+      } catch (error) {
+        store.failMemoryJob(job.id, error?.message || 'memory job failed');
+      }
+    }
+  }
+  if (config.singleSession && vault.enabled) void pumpMemory();
 
   const server = createServer((req, res) => {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
@@ -84,6 +140,7 @@ export async function startService(overrides = {}) {
   async function stop() {
     if (stopping) return;
     stopping = true;
+    memoryStopped = true;
     logger.info('service stopping');
     engine.stop();
     await Promise.race([reconcileTask, new Promise((resolve) => setTimeout(resolve, 3000))]);

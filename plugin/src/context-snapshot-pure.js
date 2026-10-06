@@ -1,5 +1,42 @@
 /** Pure helpers (no Obsidian import) for tests and apply validation. */
 
+export function snapshotFromExplicitContext(ctx, maxChars = 8000) {
+  if (!ctx || typeof ctx !== 'object') return null;
+  const body = String(ctx.body ?? '');
+  const path = String(ctx.path || '');
+  if (!path && !body) return null;
+  const selection = String(ctx.selection || '');
+  const limit = Math.max(0, Number(maxChars) || 0);
+  return {
+    attached: true,
+    path,
+    title: String(ctx.title || ''),
+    selection,
+    hasSelection: !!selection.trim(),
+    cursor:
+      ctx.cursor && typeof ctx.cursor === 'object' ? ctx.cursor : { line: 0, ch: 0 },
+    contentVersion: String(ctx.version || contentVersionHash(body)),
+    noteExcerpt: body.slice(0, limit),
+    truncated: body.length > limit,
+    capturedAt: Date.now(),
+  };
+}
+
+export function emptyContextSnapshot() {
+  return {
+    attached: false,
+    path: null,
+    title: '未附带正文',
+    selection: '',
+    hasSelection: false,
+    cursor: { line: 0, ch: 0 },
+    contentVersion: '',
+    noteExcerpt: '',
+    truncated: false,
+    capturedAt: Date.now(),
+  };
+}
+
 export function contentVersionHash(body) {
   const s = String(body ?? '');
   let h = 2166136261;

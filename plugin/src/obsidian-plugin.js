@@ -820,6 +820,8 @@ export default class MeSoulPlugin extends Plugin {
         embedTopK: 3,
         embedMinScore: 0.28,
         memoryFormationEnabled: true,
+        /** One shared timeline. Off until the release gate, including a real device check, passes. */
+        singleSession: false,
         memoryLlmBaseUrl: '',
         memoryLlmApiKey: '',
         memoryLlmModel: 'qwen3.7-flash',
@@ -1295,6 +1297,16 @@ class MeSoulSettingTab extends PluginSettingTab {
         .addToggle((t) =>
           t.setValue(s.memoryFormationEnabled !== false).onChange(async (v) => {
             s.memoryFormationEnabled = v;
+            await this.plugin.saveSettings();
+          })
+        );
+
+      new Setting(body)
+        .setName('单会话时间线')
+        .setDesc('桌面和手机共用一条对话。打开后需要 Mac 服务也打开 AOS_SINGLE_SESSION。关闭后仍可看已保存的时间线，但发送走原来的多会话。')
+        .addToggle((t) =>
+          t.setValue(!!s.singleSession).onChange(async (v) => {
+            s.singleSession = v;
             await this.plugin.saveSettings();
           })
         );

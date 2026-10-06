@@ -9,11 +9,11 @@ import { newIdempotencyKey } from './transport.js';
 import { isTransportNoise } from './session-store.js';
 import { createOutboxRunner, isRetryable } from './outbox-runner.js';
 import { serviceMessagesFromPayload, serviceSessionsFromPayload } from './service-payload.js';
-import { isUserSession, sessionKey, sessionLabel } from '../ui/sidebar.js';
+import { isUserSession } from '../ui/sidebar.js';
+import { canonicalSessionKey } from '../single-session.js';
 import { nextStepFor, phaseLabel } from '../ui/turn-phase.js';
 import { choosePack, isCompletePack, withDeadline, PREP_TIMEOUT_MS } from '../ui/send-prep.js';
 import { AOS_BUILD } from '../ui/build-id.js';
-import { chooseSession, isEphemeralLocalKey } from './chat-session-sync.js';
 import { formatSnapshotForPrompt } from '../context-snapshot-pure.js';
 
 export function createChatController(plugin, app, hooks = {}) {
@@ -35,7 +35,6 @@ export function createChatController(plugin, app, hooks = {}) {
     serviceError: '',
     stage: { build: AOS_BUILD, savedAt: 0, prep: '', receipt: '', poll: '' },
   };
-  let sessionRestored = false;
   let soulCache = null;
   const prepTokens = new Map();
   const livePolls = new Set();
@@ -88,27 +87,23 @@ export function createChatController(plugin, app, hooks = {}) {
     return rows;
   }
 
-  function isEphemeralLocalKey(key) {
-    const k = String(key || '');
-    return /:aos-[a-z0-9]+$/i.test(k);
-  }
-
-  function sessionHasLocalContent(key) {
-    if (!key) return false;
-    const rows = key === state.activeKey ? state.messages : sessionCache()?.loadTranscript(key) || [];
-    return rows.some((row) => row.role === 'user' && String(row.text || '').trim());
+  function pinMainSession() {
+    const key = canonicalSessionKey(plugin.settings?.agentId);
+    const store = sessionCache();
+    if (state.activeKey !== key) {
+      const cached = store?.loadTranscript(key) || [];
+      state.messages = cached.length ? hydratePending(key, cached) : [];
+    }
+    state.activeKey = key;
+    state.sessions = [{ key, label: '主会话', isMain: true, updatedAt: Date.now() }];
+    store?.saveActiveKey(key);
+    store?.saveSessions(state.sessions);
   }
 
   function loadLocalCache() {
     const store = sessionCache();
     if (!store) return;
-    const sessions = store.loadSessions();
-    if (sessions.length && entryMode() !== 'service') state.sessions = sessions;
-    const active = store.loadActiveKey();
-    if (active && entryMode() !== 'service') state.activeKey = active;
-    if (entryMode() === 'service' && active && !isEphemeralLocalKey(active)) {
-      state.activeKey = active;
-    }
+    pinMainSession();
     if (state.activeKey) {
       const cached = store.loadTranscript(state.activeKey);
       if (cached.length) state.messages = settleLoaded(state.activeKey, hydratePending(state.activeKey, cached));
@@ -220,54 +215,8 @@ export function createChatController(plugin, app, hooks = {}) {
     } finally {
       state.sessionsLoading = false;
     }
-    if (entryMode() === 'service' && state.sessions.length && !sessionRestored) {
-      sessionRestored = true;
-      const onServer = state.sessions.some((row) => sessionKey(row) === state.activeKey);
-      const keep = onServer && sessionHasLocalContent(state.activeKey);
-      if (!keep) {
-        const nextKey = sessionKey(state.sessions[0]) || '';
-        if (nextKey && nextKey !== state.activeKey) {
-          state.activeKey = nextKey;
-          state.messages = [];
-        }
-      }
-    } else if (entryMode() === 'service' && state.sessions.length) {
-      const staleLocal =
-        isEphemeralLocalKey(state.activeKey) && !sessionHasLocalContent(state.activeKey);
-      const missingActive = !state.activeKey || !isUserSession({ key: state.activeKey });
-      if (staleLocal || missingActive) {
-        const serverKeys = state.sessions.map(sessionKey).filter(Boolean);
-        const mainKey = serverKeys.find((key) => key.endsWith(':main'));
-        const nextKey = mainKey || serverKeys[0] || '';
-        if (nextKey && nextKey !== state.activeKey) {
-          state.activeKey = nextKey;
-          const cached = sessionCache()?.loadTranscript(nextKey);
-          state.messages = cached?.length ? hydratePending(nextKey, cached) : [];
-        }
-      }
-    } else if (!isUserSession({ key: state.activeKey })) {
-      const mainKey = state.sessions.map(sessionKey).find((key) => key.endsWith(':main'));
-      const nextKey = mainKey || state.sessions.map(sessionKey).find(Boolean) || '';
-      if (nextKey && nextKey !== state.activeKey) {
-        state.activeKey = nextKey;
-        const cached = sessionCache()?.loadTranscript(nextKey);
-        state.messages = cached?.length ? hydratePending(nextKey, cached) : [];
-      }
-    }
+    pinMainSession();
     emit();
-    const pick = chooseSession({
-      sessions: state.sessions,
-      activeKey: state.activeKey,
-      messages: state.messages,
-      composerDraft: viewHooks.map((h) => h.getDraft?.() || '').find((d) => d) || '',
-      getTranscript: (key) => sessionCache()?.loadTranscript(key) || [],
-      listPending: (key) => sessionCache()?.listPending(key) || [],
-    });
-    if (pick.key && pick.key !== state.activeKey && !['keep_local', 'keep_new'].includes(pick.reason)) {
-      state.activeKey = pick.key;
-      const cached = sessionCache()?.loadTranscript(pick.key);
-      state.messages = cached?.length ? hydratePending(pick.key, cached) : [];
-    }
     if (state.activeKey && !state.messages.length && !viewHooks.some((h) => h.sidebarOpen)) {
       await openSession(state.activeKey, { keepIfMissing: true });
     }
@@ -275,7 +224,9 @@ export function createChatController(plugin, app, hooks = {}) {
   }
 
   async function openSession(key, opts = {}) {
-    state.activeKey = key;
+    const main = canonicalSessionKey(plugin.settings?.agentId);
+    state.activeKey = main;
+    if (key && key !== main) key = main;
     viewHooks.forEach((h) => h.onCloseSidebar?.());
     const cached = sessionCache()?.loadTranscript(key);
     if (cached?.length) state.messages = hydratePending(key, cached);
@@ -305,71 +256,19 @@ export function createChatController(plugin, app, hooks = {}) {
     await flushOutbox();
   }
 
-  async function removeSession(key) {
-    if (!key) return;
-    const row = state.sessions.find((item) => sessionKey(item) === key);
-    try {
-      if (!isEphemeralLocalKey(key) || sessionHasLocalContent(key)) {
-        if (entryMode() === 'service') {
-          const client = plugin.serviceClient?.();
-          if (!client?.hasCredential?.()) {
-            const error = new Error('还没有配对这台设备');
-            error.code = 'NOT_PAIRED';
-            throw error;
-          }
-          await client.deleteSession(key);
-        } else {
-          const client = plugin.operator;
-          if (!client || client.status.state !== 'live') {
-            const error = new Error(client?.status?.message || 'OpenClaw 未连接');
-            error.code = 'NOT_CONNECTED';
-            throw error;
-          }
-          await client.deleteSession(key);
-        }
-      }
-    } catch (error) {
-      const message = error?.message || '删不掉这条会话';
-      state.syncHint = message;
-      deps.Notice?.(message);
-      emit();
-      return;
-    }
-    const store = sessionCache();
-    for (const turn of store?.listPending?.(key) || []) {
-      if (turn?.turnId) store.dropTurn(turn.turnId);
-    }
-    store?.saveTranscript?.(key, []);
-    state.sessions = state.sessions.filter((item) => sessionKey(item) !== key);
-    persistLocal();
-    deps.Notice?.(row ? `已删除「${sessionLabel(row)}」` : '已删除');
-    if (state.activeKey === key) {
-      const next = state.sessions.map(sessionKey).find(Boolean);
-      if (next) {
-        await openSession(next);
-        return;
-      }
-      newSession();
-      return;
-    }
-    emit();
+  async function removeSession() {
+    deps.Notice?.('现在只有主会话');
   }
 
   function newSession() {
-    sessionRestored = true;
-    const key = `agent:${plugin.settings.agentId || 'main'}:aos-${Date.now().toString(36)}`;
-    state.activeKey = key;
-    state.messages = [];
-    viewHooks.forEach((h) => h.onCloseSidebar?.())
-    state.sessions = [{ key, label: '新会话', updatedAt: Date.now() }, ...state.sessions];
-    persistLocal();
+    pinMainSession();
     emit();
     viewHooks.forEach((h) => h.onComposerFocus?.());
   }
 
   function continueRecent() {
-    const key = state.sessions.map(sessionKey).find(Boolean);
-    if (key) openSession(key);
+    pinMainSession();
+    emit();
   }
 
   async function readRel(path) {
@@ -385,7 +284,7 @@ export function createChatController(plugin, app, hooks = {}) {
   function explainSendError(error) {
     const message = error?.message || String(error || '');
     if (/does not match its placement/i.test(message)) {
-      return '这个会话的运行位置和网关对不上。点「新会话」再发一次。';
+      return '这条消息的运行位置和网关对不上。再发一次即可，会留在主会话里。';
     }
     if (error?.code === 'CONNECTION_LOST' || error?.code === 'NOT_CONNECTED' || error?.code === 'CONNECTION_REPLACED') {
       return '连接断了，正在重连。';
@@ -439,6 +338,23 @@ export function createChatController(plugin, app, hooks = {}) {
       return;
     }
     state.stage.prep = chosen.source;
+    if (plugin.settings?.singleSession) {
+      store?.markPending?.(turnId, { prompt: content, status: 'queued', message: content });
+      if (draft) {
+        draft.turnStatus = 'queued';
+        draft.streaming = false;
+        draft.text = '待发出（已排队）';
+        draft.activity = null;
+      }
+      saveSessionTranscript(sessionKey, loaded.rows);
+      if (sessionKey === state.activeKey) {
+        state.progressLabel = phaseLabel({ status: 'queued' });
+        emit();
+      }
+      if (!isLive()) return;
+      await flushOutbox();
+      return;
+    }
     let memoryRecall = null;
     if (plugin.settings?.retrieve !== false) {
       try {
@@ -480,8 +396,12 @@ export function createChatController(plugin, app, hooks = {}) {
       return;
     }
     const content = String(text);
+    pinMainSession();
+    if (plugin.settings?.singleSession && entryMode() === 'direct') {
+      deps.Notice?.('单会话需要 Mac 服务。请把连接改成服务模式。');
+      return { ok: false, error: new Error('DIRECT_DISABLED') };
+    }
     if (entryMode() !== 'service') plugin.ensureOperator?.().catch(() => {});
-    if (!isUserSession({ key: state.activeKey })) newSession();
     const sessionKey = state.activeKey;
     const turnId = newIdempotencyKey();
     const now = Date.now();
@@ -1314,11 +1234,28 @@ export function createChatController(plugin, app, hooks = {}) {
       }
     }
   }
+  async function searchTimeline(query) {
+    const client = plugin.serviceClient?.();
+    if (!client?.searchTimeline) {
+      state.timelineHits = [];
+      emit();
+      return [];
+    }
+    try {
+      const result = await client.searchTimeline(query);
+      state.timelineHits = result?.json?.messages || result?.messages || [];
+    } catch {
+      state.timelineHits = [];
+    }
+    emit();
+    return state.timelineHits;
+  }
+
   return {
     state, getState, subscribe, attachView,
     loadLocalCache, persistLocal, send, abort, openSession, removeSession, newSession,
     refreshSessions, flushOutbox, recoverFromBackground, pendingAction, regenerate,
     connectionState, entryMode, isLive, sessionCache, explainSendError, applyTurnStatus,
-    continueRecent, outbox, showDiagnosis, checkService,
+    continueRecent, outbox, showDiagnosis, checkService, searchTimeline,
   };
 }

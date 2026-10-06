@@ -6,11 +6,30 @@ import { truncateNoteBody, DEFAULT_ACTIVE_NOTE_MAX_CHARS, normalizeMdPath } from
 import { captureEditorContext } from './editor-apply.js';
 import {
   contentVersionHash,
+  emptyContextSnapshot,
   formatSnapshotForPrompt,
+  snapshotFromExplicitContext,
   snapshotStillValid,
 } from './context-snapshot-pure.js';
 
 export { contentVersionHash, formatSnapshotForPrompt, snapshotStillValid };
+
+function activeView(app) {
+  return app.workspace?.activeLeaf?.view || app.workspace?.getMostRecentLeaf?.()?.view || null;
+}
+
+function explicitSnapshot(app, maxChars) {
+  const view = activeView(app);
+  if (!view || view.getViewType?.() !== 'meinc-home') return null;
+  if (typeof view.getAgentContext !== 'function') return emptyContextSnapshot();
+  let ctx = null;
+  try {
+    ctx = view.getAgentContext();
+  } catch {
+    ctx = null;
+  }
+  return snapshotFromExplicitContext(ctx, maxChars) || emptyContextSnapshot();
+}
 
 /**
  * @param {import('obsidian').App} app
@@ -20,6 +39,15 @@ export function liveContextLabel(app, opts = {}) {
   const mode = opts.mode || 'follow';
   if (mode === 'off') {
     return { title: '未附带上下文', hasSelection: false, path: null, attached: false };
+  }
+  const explicit = explicitSnapshot(app, opts.maxChars);
+  if (explicit) {
+    return {
+      title: explicit.attached ? explicit.title || '当前正文' : '未附带正文',
+      hasSelection: explicit.hasSelection,
+      path: explicit.path,
+      attached: explicit.attached,
+    };
   }
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   if (!view?.file) {
@@ -69,6 +97,9 @@ export function captureContextSnapshot(app, opts = {}) {
       capturedAt: Date.now(),
     };
   }
+
+  const explicit = explicitSnapshot(app, maxChars);
+  if (explicit) return explicit;
 
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   if (!view?.file || !view.editor) {

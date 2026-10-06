@@ -9,6 +9,7 @@ import { runFormationAfterTurn } from './lifecycle.js';
  * @param {{ sessionKey: string, turnId: string, rows: { role: string, text?: string, ts?: number, turnId?: string }[] }} args
  */
 export function scheduleFormationAfterTurn(app, plugin, args) {
+  if (plugin?.settings?.singleSession) return;
   const turnId = args.turnId;
   const rows = args.rows || [];
   const user = rows.find((m) => m.turnId === turnId && m.role === 'user');

@@ -19,6 +19,9 @@ const bundled = await esbuild.build({
   format: 'iife',
   platform: 'browser',
   target: 'es2020',
+  alias: {
+    obsidian: join(root, 'scripts/obsidian-preview-stub.js'),
+  },
 });
 const js = bundled.outputFiles[0].text;
 const css = readFileSync(join(root, 'styles.css'), 'utf8');
@@ -37,7 +40,7 @@ function baselineLayer() {
   return layer;
 }
 const baselineCss = baselineLayer();
-const states = ['thread', 'tools', 'empty', 'offline', 'pairing', 'keyboard', 'drawer'];
+const states = ['capsule', 'peek', 'expanded', 'keyboard'];
 const widths = [375, 393, 430];
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 

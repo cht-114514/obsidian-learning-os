@@ -18,6 +18,7 @@ import {
   attachForesightFromCells,
   emptyRecallPack,
 } from './recall-pack.js';
+import { isDialogueRow, mergeWikiRebuild } from './index-scope.js';
 
 /**
  * @param {any} app
@@ -185,7 +186,8 @@ export async function removeVectorsForPath(app, wikiPath, state = {}) {
 }
 
 /**
- * Full rebuild of vectors for accepted wiki sources. Drops legacy index.md.
+ * Full rebuild of wiki vectors only. Dialogue rows (episode / fact / scene)
+ * stay in the file, and the wiki navigation index is left in place.
  * @param {any} app
  * @param {any} plugin
  * @param {{ path: string, md: string }[]} files
@@ -196,27 +198,29 @@ export async function reindexAllVectors(app, plugin, files) {
     return { skipped: true, reason: 'no-key', vectorChunks: 0, embedded: 0 };
   }
 
-  let rows = await loadVectorRows(app);
+  const existing = await loadVectorRows(app);
+  const dialogue = existing.filter(isDialogueRow);
   const keepPaths = new Set(files.map((f) => f.path));
-  rows = rows.filter((r) => keepPaths.has(r.path) && r.model === cfg.embedModel);
+  let wikiRows = existing.filter(
+    (row) => !isDialogueRow(row) && keepPaths.has(row.path) && row.model === cfg.embedModel
+  );
 
   let embedded = 0;
   let reused = 0;
   for (const f of files) {
-    const res = await upsertVectorsForPath(app, plugin, f.path, f.md, { rows });
-    if (res.rows) rows = res.rows;
+    const res = await upsertVectorsForPath(app, plugin, f.path, f.md, { rows: wikiRows });
+    if (res.rows) wikiRows = res.rows.filter((row) => !isDialogueRow(row));
     embedded += res.embedded || 0;
     reused += res.reused || 0;
   }
-  rows = rows.filter((r) => keepPaths.has(r.path));
+  wikiRows = wikiRows.filter((row) => keepPaths.has(row.path));
+  const rows = mergeWikiRebuild(dialogue, wikiRows);
   await saveVectorRows(app, rows);
-
-  // Keyword index is obsolete — remove if present
-  await vaultDeleteIfExists(app, 'agent-inbox/wiki/index.md');
 
   return {
     ok: true,
     vectorChunks: rows.length,
+    dialogueChunks: dialogue.length,
     embedded,
     reused,
     model: cfg.embedModel,

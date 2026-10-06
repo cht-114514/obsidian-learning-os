@@ -1,0 +1,11 @@
+{
+  "name": "@obsidian-agent-os/context-engine",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw context engine for the Agent OS single session",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

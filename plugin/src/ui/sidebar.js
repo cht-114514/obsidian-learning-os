@@ -1,4 +1,5 @@
 import { formatRelativeTime, sessionBucket, stripInjectedContext } from './turns.js';
+import { timelineChrome } from '../single-session.js';
 
 export function sessionKey(row) {
   return row?.key || row?.sessionKey || row?.id || '';
@@ -80,12 +81,6 @@ export function mountSidebar(el, handlers) {
   const sub = names.createDiv({ cls: 'aos-identity-sub' });
   sub.createSpan({ cls: 'aos-status-dot' });
   const subText = sub.createSpan({ cls: 'aos-status-text', text: '未连接' });
-  head.createEl('button', {
-    cls: 'aos-new',
-    text: '新会话',
-    attr: { type: 'button' },
-  }).onclick = () => handlers.onNew();
-
   const search = el.createEl('input', {
     cls: 'aos-search',
     attr: { type: 'search', placeholder: '搜索会话', 'aria-label': '搜索会话' },
@@ -103,6 +98,7 @@ export function mountSidebar(el, handlers) {
   search.addEventListener('input', () => {
     query = search.value || '';
     armedKey = '';
+    handlers.onSearch?.(query);
     if (last) paint(last);
   });
 
@@ -116,7 +112,21 @@ export function mountSidebar(el, handlers) {
     sub.toggleClass('is-live', live);
     sub.toggleClass('is-wait', state.connection === 'pairing' || state.connection === 'connecting');
     subText.setText(live ? '已连接' : state.connection === 'pairing' ? '等待批准' : state.connection === 'connecting' ? '正在连接' : '未连接');
+    const chrome = timelineChrome();
+    search.placeholder = chrome.searchPlaceholder;
     list.empty();
+    if (!chrome.showSessions) {
+      const hits = state.timelineHits || [];
+      if (!hits.length) {
+        list.createDiv({ cls: 'aos-session-empty', text: query ? '没有这句原文' : '一条时间线' });
+        return;
+      }
+      for (const hit of hits) {
+        const item = list.createDiv({ cls: 'aos-session' });
+        item.createDiv({ cls: 'aos-session-title', text: String(hit.text || '').slice(0, 80) });
+      }
+      return;
+    }
     const groups = groupSessions(state.sessions, { query, now: state.now });
     if (!groups.length) {
       const text = state.sessionsLoading

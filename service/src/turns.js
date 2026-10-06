@@ -15,6 +15,8 @@
 import { randomUUID } from 'node:crypto';
 import { isSettled, isTerminal } from './store.js';
 import { classifyRun, progressPreview } from './turn-protocol.js';
+import { isAgentOsSessionKey } from './timeline.js';
+import { prepareTurnContext } from './context/prepare.js';
 
 /** Cap on stored streamed text per turn event, to keep the database small. */
 const PROGRESS_CHUNK_MAX = 4000;
@@ -263,6 +265,19 @@ export function createTurnEngine(deps) {
     }, turnTimeoutMs);
     let live = null;
     try {
+      if (config.singleSession && isAgentOsSessionKey(turn.sessionKey)) {
+        const prepared = deps.prepareContext
+          ? await deps.prepareContext(turn)
+          : await prepareTurnContext({ store, turn, ...(deps.context || {}) });
+        if (prepared?.overflow) {
+          clearTimeout(timer);
+          store.markFailed(turn.id, prepared.message || '当前输入放不下，请拆分后再发');
+          store.appendEvent(turn.id, 'status', '当前输入放不下，请拆分后再发');
+          running.delete(turn.id);
+          notifyIdle();
+          return store.turnById(turn.id);
+        }
+      }
       live = await gateway.ensureLive();
       const result = await gateway.streamTurn({
         sessionKey: turn.sessionKey,
@@ -283,7 +298,14 @@ export function createTurnEngine(deps) {
         return store.turnById(turn.id);
       }
       const text = String(result?.text || '');
-      store.markCompleted(turn.id, text);
+      if (config.singleSession && isAgentOsSessionKey(turn.sessionKey)) {
+        const settled = store.completeTurnWithMemory(turn.id, text);
+        if (deps.onMemoryJob && settled?.job && !settled.duplicate) {
+          deps.onMemoryJob(settled.job);
+        }
+      } else {
+        store.markCompleted(turn.id, text);
+      }
       store.appendEvent(turn.id, 'result', text.slice(0, PROGRESS_CHUNK_MAX));
       store.upsertSession(turn.sessionKey, agentId);
       logger.info('turn completed', { turnId: turn.id, bytes: text.length });

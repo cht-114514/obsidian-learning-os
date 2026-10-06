@@ -88,6 +88,8 @@ export function loadConfig(overrides = {}) {
     },
     /** A single turn may run this long before it is treated as stuck. */
     turnTimeoutMs: Number(env('AOS_TURN_TIMEOUT_MS', String(15 * 60 * 1000))),
+    /** Single shared timeline. Off until the release gate (including a real device check) passes. */
+    singleSession: env('AOS_SINGLE_SESSION', local.singleSession ? '1' : '0') === '1',
     idlePollMs: Number(env('AOS_TURN_POLL_MS', '2000')),
     logLevel: env('AOS_LOG_LEVEL', 'info'),
     logBody: env('AOS_LOG_BODY', '') === '1',

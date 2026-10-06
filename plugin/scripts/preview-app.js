@@ -2,6 +2,7 @@
  * Browser entry for the phone preview. Mocks the Obsidian element helpers.
  */
 import { mountAgentApp } from '../src/ui/app-view.js';
+import { createCompanionController } from '../src/ui/companion/shell.js';
 import { previewMessages, previewNow, previewSessions, previewSkills } from '../tests/fixtures/mobile-preview-state.js';
 
 function enhance(el) {
@@ -153,32 +154,150 @@ const memorySessionStore = (() => {
   };
 })();
 
-const mode = (location.hash || '#thread').slice(1).split('&')[0] || 'thread';
-const theme = new URLSearchParams(location.hash.slice(1).includes('&') ? location.hash.slice(location.hash.indexOf('&') + 1) : location.search).get('theme');
+function installDomHelpers() {
+  const proto = HTMLElement.prototype;
+  if (proto.createDiv) return;
+  proto.createDiv = function (opts) {
+    return make('div', opts, this);
+  };
+  proto.createEl = function (tag, opts) {
+    return make(tag, opts, this);
+  };
+  proto.createSpan = function (opts) {
+    return make('span', opts, this);
+  };
+  proto.empty = function () {
+    this.replaceChildren();
+  };
+  proto.addClass = function (name) {
+    this.classList.add(name);
+  };
+  proto.removeClass = function (name) {
+    this.classList.remove(name);
+  };
+  proto.toggleClass = function (name, on) {
+    this.classList.toggle(name, on);
+  };
+  proto.hasClass = function (name) {
+    return this.classList.contains(name);
+  };
+  proto.setText = function (text) {
+    this.textContent = text ?? '';
+  };
+  proto.setAttr = function (key, value) {
+    this.setAttribute(key, value);
+  };
+}
+
+const hashBody = (location.hash || '#peek').replace(/^#/, '');
+const mode = hashBody.split('&')[0] || 'peek';
+const theme = new URLSearchParams(hashBody.includes('&') ? hashBody.slice(hashBody.indexOf('&') + 1) : location.search).get('theme');
 document.body.classList.add('is-mobile', 'is-phone', theme === 'light' ? 'theme-light' : 'theme-dark');
 
 const host = enhance(document.getElementById('app'));
 const plugin = fakePlugin(mode);
-const which = mode === 'tools' ? 'tools' : mode === 'empty' || mode === 'offline' || mode === 'pairing' || mode === 'drawer' ? 'empty' : 'thread';
+const chatModes = new Set(['chat', 'drawer', 'pairing', 'tools', 'empty', 'offline', 'history']);
+const surface = new URLSearchParams(hashBody.includes('&') ? hashBody.slice(hashBody.indexOf('&') + 1) : '').get('surface');
 
-mountAgentApp(host, {
-  app: { isMobile: true, vault: { getAbstractFileByPath: () => null } },
-  plugin,
-  mode: 'fullscreen',
-  preview: {
-    sessions: previewSessions,
-    messages: mode === 'history' ? previewMessages('thread') : previewMessages(which),
-    activeKey: 'agent:main:main',
-    drawer: mode === 'drawer',
-    keyboard: mode === 'keyboard' ? '280px' : '',
-    now: previewNow,
-  },
-  MarkdownRenderer: {
-    render: async (_app, markdown, el) => {
-      el.innerHTML = miniMarkdown(markdown);
+function mountChatPreview() {
+  const which = mode === 'tools' ? 'tools' : mode === 'empty' || mode === 'offline' || mode === 'pairing' || mode === 'drawer' ? 'empty' : 'thread';
+  mountAgentApp(host, {
+    app: { isMobile: true, vault: { getAbstractFileByPath: () => null } },
+    plugin,
+    mode: 'fullscreen',
+    preview: {
+      sessions: previewSessions,
+      messages: mode === 'history' ? previewMessages('thread') : previewMessages(which),
+      activeKey: 'agent:main:main',
+      drawer: mode === 'drawer',
+      keyboard: '',
+      now: previewNow,
     },
-  },
-  Notice: (message) => {
-    document.body.dataset.notice = String(message || '');
-  },
-});
+    MarkdownRenderer: {
+      render: async (_app, markdown, el) => {
+        el.innerHTML = miniMarkdown(markdown);
+      },
+    },
+    Notice: (message) => {
+      document.body.dataset.notice = String(message || '');
+    },
+  });
+}
+
+function mountCompanionPreview() {
+  installDomHelpers();
+  const poem = '莽莽万重山，孤城山谷间。\n无风云出塞，不夜月临关。\n属国归何晚，楼兰斩未还。';
+  const note = host.createDiv({ cls: 'markdown-preview-view aos-preview-note' });
+  note.createEl('h1', { text: '诗歌鉴赏' });
+  for (const line of poem.split('\n')) note.createEl('p', { text: line });
+  const editor = {
+    getSelection: () => '无风云出塞，不夜月临关。',
+    getCursor: () => ({ line: 1, ch: 0 }),
+    getValue: () => poem,
+    coordsAtPos: () => ({ left: 48, right: 250, top: 196, bottom: 228 }),
+  };
+  const app = {
+    workspace: {
+      getActiveViewOfType: () => ({
+        file: { path: '诗.md', basename: '诗歌鉴赏' },
+        editor,
+      }),
+      on: () => ({ id: 'preview' }),
+    },
+    vault: { getAbstractFileByPath: () => null, read: async () => poem },
+  };
+  const state = {
+    sessions: previewSessions,
+    activeKey: 'agent:main:main',
+    messages: previewMessages('thread'),
+    busy: false,
+    progressLabel: '',
+    startedAt: 0,
+  };
+  plugin.ensureChatController = () => ({
+    state,
+    connectionState: () => ({ state: 'live' }),
+    subscribe: () => () => {},
+    attachView: () => () => {},
+    loadLocalCache() {},
+    refreshSessions: async () => {},
+    send: async () => ({ ok: true }),
+    abort() {},
+    regenerate() {},
+    continueRecent() {},
+    pendingAction() {},
+  });
+  plugin.registerEvent = () => {};
+  plugin.isChatViewActive = () => false;
+  plugin.activateView = () => {};
+  plugin.settings.commandBarEnabled = true;
+  plugin.settings.activeNoteMaxChars = 4000;
+  plugin.setConnectionPrefs = async () => {};
+  plugin.setKernelModel = () => {};
+  const companion = createCompanionController(app, plugin, {
+    Notice: (message) => {
+      document.body.dataset.notice = String(message || '');
+    },
+    MarkdownRenderer: {
+      render: async (_app, markdown, el) => {
+        el.innerHTML = miniMarkdown(markdown);
+      },
+    },
+    previewViewport:
+      mode === 'keyboard'
+        ? () => ({
+            width: window.innerWidth,
+            height: Math.max(280, Math.round(window.innerHeight * 0.46)),
+            offsetTop: 0,
+            offsetLeft: 0,
+            scale: 1,
+          })
+        : null,
+  });
+  if (mode === 'expanded' || mode === 'keyboard') companion.expand();
+  else if (mode === 'capsule') companion.collapse();
+  else companion.open();
+}
+
+if (surface === 'chat' || chatModes.has(mode)) mountChatPreview();
+else mountCompanionPreview();

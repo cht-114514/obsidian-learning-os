@@ -17,6 +17,18 @@ export function enterInsertsNewline(mobile) {
   return !!mobile;
 }
 
+/**
+ * Cap a growing textarea. maxPx 0 means "use the line count only".
+ * A short visible frame can pass a smaller maxPx so the send button stays on screen.
+ */
+export function clampInputHeight(scrollHeight, line = 24, maxLines = 4, maxPx = 0) {
+  const linePx = Math.max(1, Number(line) || 24);
+  const byLines = linePx * Math.max(1, Number(maxLines) || 1);
+  const cap = maxPx > 0 ? Math.max(linePx, Math.min(byLines, maxPx)) : byLines;
+  const scroll = Math.max(linePx, Number(scrollHeight) || linePx);
+  return Math.round(Math.max(linePx, Math.min(scroll, cap)));
+}
+
 const THINKING_ZH = {
   off: '关闭',
   none: '关闭',
@@ -111,8 +123,9 @@ function ringSvg(pct) {
  * }} opts
  */
 export function mountComposer(el, opts) {
+  const companion = opts.variant === 'companion';
   el.empty();
-  const dock = el.createDiv({ cls: 'aos-dock' });
+  const dock = el.createDiv({ cls: `aos-dock${companion ? ' is-companion' : ''}` });
   const progress = dock.createDiv({ cls: 'aos-progress' });
   progress.hidden = true;
   const progressLabel = progress.createSpan({ cls: 'aos-progress-label', text: '思考中' });
@@ -129,12 +142,6 @@ export function mountComposer(el, opts) {
     attr: { rows: '1', placeholder: '发消息' },
   });
   const bar = card.createDiv({ cls: 'aos-composer-bar' });
-  const plus = bar.createEl('button', {
-    cls: 'aos-icon-btn aos-composer-new',
-    text: '+',
-    attr: { type: 'button', 'aria-label': '新会话' },
-  });
-  plus.remove();
   const ring = bar.createEl('button', {
     cls: 'aos-ring',
     attr: { type: 'button', 'aria-label': '上下文用量' },
@@ -145,7 +152,7 @@ export function mountComposer(el, opts) {
     text: '模型 · 使用默认',
     attr: { type: 'button', 'aria-label': '思考档位和模型' },
   });
-  chip.hidden = false;
+  chip.hidden = companion;
   bar.createDiv({ cls: 'aos-bar-spacer' });
   const action = bar.createEl('button', {
     cls: 'aos-send',
@@ -159,6 +166,7 @@ export function mountComposer(el, opts) {
   sheet.hidden = true;
   let pickerMask = null;
 
+  let maxInputPx = 0;
   let busy = false;
   let thinking = [];
   let thinkingId = '';
@@ -189,10 +197,12 @@ export function mountComposer(el, opts) {
   }
 
   function grow() {
-    input.style.height = 'auto';
     const line = 24;
-    const next = Math.min(input.scrollHeight, line * 6);
-    input.style.height = `${Math.max(line, next)}px`;
+    const lines = companion ? 4 : 6;
+    input.style.height = 'auto';
+    const next = clampInputHeight(input.scrollHeight, line, lines, maxInputPx);
+    input.style.height = `${next}px`;
+    input.style.overflowY = input.scrollHeight > next + 1 ? 'auto' : 'hidden';
   }
 
   function closeSheet() {
@@ -211,7 +221,7 @@ export function mountComposer(el, opts) {
     const fullModel = model?.id || '未选择模型';
     const fullThink = level ? thinkingLabel(level) : '使用默认';
     chip.setAttr('title', `${fullModel} · ${fullThink}`);
-    chip.hidden = false;
+    chip.hidden = companion;
   }
 
   function levelsFor(model) {
@@ -450,6 +460,9 @@ export function mountComposer(el, opts) {
     progressTime.setText(formatElapsed(Date.now() - startedAt));
   }
 
+  input.addEventListener('focus', () => {
+    opts.onFocus?.();
+  });
   input.addEventListener('compositionstart', () => {
     composing = true;
   });
@@ -493,6 +506,12 @@ export function mountComposer(el, opts) {
       }
     },
     setProgress(state) {
+      if (companion) {
+        progress.hidden = true;
+        clearInterval(clock);
+        clock = 0;
+        return;
+      }
       const on = !!state?.on;
       progress.hidden = !on;
       if (!on) {
@@ -509,6 +528,10 @@ export function mountComposer(el, opts) {
       input.setAttr('placeholder', text || '发消息');
     },
     setUsage(usage) {
+      if (companion) {
+        ring.hidden = true;
+        return;
+      }
       const limit = Number(usage?.limit);
       const used = Number(usage?.used);
       if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(used)) {
@@ -536,6 +559,13 @@ export function mountComposer(el, opts) {
       input.value = text;
       grow();
       input.focus();
+    },
+    setMaxInputHeight(px) {
+      maxInputPx = Number(px) > 0 ? Number(px) : 0;
+      grow();
+    },
+    openMore() {
+      openPicker();
     },
     focus() {
       input.focus();

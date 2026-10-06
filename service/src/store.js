@@ -16,6 +16,7 @@
  * explicit user decision, because blindly re-running it could repeat a write.
  */
 import { DatabaseSync } from 'node:sqlite';
+import { attachTimeline } from './timeline.js';
 
 const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 /**
@@ -267,11 +268,20 @@ export function createStore(dbPath) {
      * `clientTurnId` was already accepted, so a retry can never create a
      * second run.
      */
-    receiveTurn({ id, clientTurnId, deviceId, sessionKey, message, agentId, thinking, model }) {
+    receiveTurn({ id, clientTurnId, deviceId, sessionKey, message, agentId, thinking, model, ownTransaction = true }) {
       const existing = stmt.turnByClientId.get(clientTurnId);
       if (existing) return { turn: rowToTurn(existing), created: false };
       const ts = now();
-      db.exec('BEGIN IMMEDIATE');
+      const begin = () => {
+        if (ownTransaction) db.exec('BEGIN IMMEDIATE');
+      };
+      const commit = () => {
+        if (ownTransaction) db.exec('COMMIT');
+      };
+      const rollback = () => {
+        if (ownTransaction) db.exec('ROLLBACK');
+      };
+      begin();
       try {
         stmt.insertTurn.run(
           id,
@@ -285,9 +295,9 @@ export function createStore(dbPath) {
           ts
         );
         stmt.upsertSession.run(sessionKey, agentId || 'main', '', ts, ts);
-        db.exec('COMMIT');
+        commit();
       } catch (error) {
-        db.exec('ROLLBACK');
+        rollback();
         // A concurrent duplicate slipped in between the read and the write.
         const raced = stmt.turnByClientId.get(clientTurnId);
         if (raced) return { turn: rowToTurn(raced), created: false };
@@ -440,5 +450,6 @@ export function createStore(dbPath) {
     },
   };
 
+  attachTimeline(db, store);
   return store;
 }

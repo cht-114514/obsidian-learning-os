@@ -22,6 +22,7 @@
  */
 import { checkWritePolicy } from '@obsidian-agent-os/protocol';
 import { bearerFromHeader, normalizePairingCode } from './devices.js';
+import { agentOsSessionKey, isAgentOsSessionKey } from './timeline.js';
 
 const JSON_LIMIT = 256 * 1024;
 
@@ -276,6 +277,73 @@ export function createApi(deps) {
     }
 
     // ---- turns -----------------------------------------------------------
+    if (method === 'GET' && matchPath('/v1/conversation/messages', path)) {
+      const device = requireDevice(req, res);
+      if (!device) return;
+      const before = Number(url.searchParams.get('before') || '0') || 0;
+      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || '40') || 40));
+      sendJson(res, 200, {
+        messages: store.messagesPage(agentOsSessionKey(agentId), { before, limit }),
+      });
+      return;
+    }
+    if (method === 'GET' && matchPath('/v1/conversation/search', path)) {
+      const device = requireDevice(req, res);
+      if (!device) return;
+      const q = String(url.searchParams.get('q') || '');
+      sendJson(res, 200, {
+        messages: store.searchTimeline(agentOsSessionKey(agentId), q, 30),
+      });
+      return;
+    }
+    if (method === 'GET' && matchPath('/v1/conversation/sync', path)) {
+      const device = requireDevice(req, res);
+      if (!device) return;
+      const afterSeq = Number(url.searchParams.get('afterSeq') || '0') || 0;
+      sendJson(res, 200, {
+        messages: store.messagesAfter(agentOsSessionKey(agentId), afterSeq, 100),
+      });
+      return;
+    }
+    if (method === 'POST' && matchPath('/v1/conversation/turns', path)) {
+      const device = requireDevice(req, res);
+      if (!device) return;
+      if (!config.singleSession) {
+        sendJson(res, 409, errorBody('DISABLED', '单会话还没打开'));
+        return;
+      }
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        sendJson(res, error.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400, errorBody(error.code || 'BAD_REQUEST', error.message));
+        return;
+      }
+      const clientTurnId = String(body.clientTurnId || '').trim().slice(0, 128);
+      const message = String(body.message ?? '');
+      if (!clientTurnId || !message.trim()) {
+        sendJson(res, 400, errorBody('BAD_REQUEST', 'clientTurnId 和原文都要有'));
+        return;
+      }
+      const received = store.receiveConversationTurn({
+        id: body.id || undefined,
+        clientTurnId,
+        deviceId: device.id,
+        message,
+        agentId: String(body.agentId || agentId).slice(0, 64),
+        thinking: String(body.thinking || '').trim().slice(0, 64),
+        model: String(body.model || '').trim().slice(0, 200),
+        entry: String(body.entry || 'fullscreen').slice(0, 32),
+        snapshot: body.snapshot && typeof body.snapshot === 'object' ? body.snapshot : null,
+      });
+      if (received.created) engine.schedulePump?.();
+      sendJson(res, received.created ? 201 : 200, {
+        turn: engine.describeTurn(received.turn, 0),
+        duplicate: !received.created,
+        sessionKey: agentOsSessionKey(agentId),
+      });
+      return;
+    }
     if (method === 'POST' && matchPath('/v1/turns', path)) {
       const device = requireDevice(req, res);
       if (!device) return;
@@ -296,6 +364,39 @@ export function createApi(deps) {
       const message = String(body.message ?? '');
       if (!message.trim()) {
         sendJson(res, 400, errorBody('BAD_REQUEST', 'message is required'));
+        return;
+      }
+      const requestedKey = String(body.sessionKey || '').trim().slice(0, 200);
+      if (config.singleSession && requestedKey && !isAgentOsSessionKey(requestedKey)) {
+        const existing = store.turnByClientId(clientTurnId);
+        if (existing) {
+          sendJson(res, 200, {
+            turn: engine.describeTurn(existing, 0),
+            duplicate: true,
+            draining: true,
+          });
+          return;
+        }
+        sendJson(res, 409, errorBody('UPGRADE_REQUIRED', '请升级客户端。新的对话只写进统一时间线。'));
+        return;
+      }
+      if (config.singleSession) {
+        const received = store.receiveConversationTurn({
+          clientTurnId,
+          deviceId: device.id,
+          message,
+          agentId: String(body.agentId || agentId).slice(0, 64),
+          thinking: String(body.thinking || '').trim().slice(0, 64),
+          model: String(body.model || '').trim().slice(0, 200),
+          entry: String(body.entry || 'fullscreen').slice(0, 32),
+          snapshot: body.snapshot && typeof body.snapshot === 'object' ? body.snapshot : null,
+        });
+        if (received.created) engine.schedulePump?.();
+        sendJson(res, received.created ? 201 : 200, {
+          turn: engine.describeTurn(received.turn, 0),
+          duplicate: !received.created,
+          sessionKey: agentOsSessionKey(agentId),
+        });
         return;
       }
       const received = engine.receiveTurn({

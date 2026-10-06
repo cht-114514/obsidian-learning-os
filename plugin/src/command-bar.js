@@ -315,31 +315,6 @@ export function createCommandBarController(app, plugin, deps) {
     });
     effortSelect.onchange = () => onEffortChange();
 
-    sessionWrap = head.createDiv({ cls: 'me-soul-cmdbar-session-wrap' });
-    sessionBtn = sessionWrap.createEl('button', {
-      cls: 'me-soul-cmdbar-session-btn',
-      attr: {
-        type: 'button',
-        'aria-label': '会话',
-        'aria-expanded': 'false',
-        title: '新建或加载历史对话',
-      },
-      text: '会话',
-    });
-    sessionMenu = sessionWrap.createDiv({
-      cls: 'me-soul-cmdbar-session-menu',
-      attr: { role: 'menu', 'aria-hidden': 'true' },
-    });
-    sessionBtn.onclick = (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (busy) {
-        notify('生成中，稍后再切换会话');
-        return;
-      }
-      void toggleSessionMenu();
-    };
-
     statusEl = head.createSpan({ cls: 'me-soul-cmdbar-status', text: '' });
 
     const fullBtn = head.createEl('button', {

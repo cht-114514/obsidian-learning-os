@@ -1,0 +1,10 @@
+{
+  "id": "agent-os",
+  "name": "Agent OS Context",
+  "description": "Assembles Soul, working state, recall, and note snapshots for the agent-os session key only.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

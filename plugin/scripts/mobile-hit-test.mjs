@@ -19,6 +19,9 @@ const bundled = await esbuild.build({
   format: 'iife',
   platform: 'browser',
   target: 'es2020',
+  alias: {
+    obsidian: join(root, 'scripts/obsidian-preview-stub.js'),
+  },
 });
 const js = bundled.outputFiles[0].text;
 const css = readFileSync(join(root, 'styles.css'), 'utf8');
@@ -88,7 +91,7 @@ writeFileSync(
 <div class="mobile-navbar" aria-hidden="true"></div>
 <div class="fake-fab" aria-hidden="true"></div>
 <div class="fake-dock" aria-hidden="true"></div>
-<script>location.hash='#thread&theme=dark';</script>
+<script>location.hash='#chat&theme=dark';</script>
 <script>${js}</script>
 <script>
 async function runHitTest() {

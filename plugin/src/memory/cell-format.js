@@ -29,12 +29,20 @@ export function slugifyScene(title) {
  *   episode: string,
  *   facts: string[],
  *   foresight: { text: string, start?: string, end?: string }[],
+ *   sourceIds?: string[],
+ *   speaker?: string,
+ *   factType?: string,
+ *   eventTime?: string,
+ *   validUntil?: string,
+ *   supersedes?: string,
+ *   traceable?: boolean,
  * }} cell
  */
 export function formatMemCellMarkdown(cell) {
-  const factsYaml = (cell.facts || []).map((f) => `  - ${yamlQuote(f)}`).join('\n');
+  const factsYaml = (cell.facts || []).map((f) => `  - ${yamlQuote(typeof f === 'string' ? f : f.text)}`).join('\n');
   const foresightJson = JSON.stringify(cell.foresight || []);
-  return [
+  const sourceIds = cell.sourceIds || [];
+  const lines = [
     '---',
     'type: memcell',
     `cell_id: ${cell.cellId}`,
@@ -44,8 +52,21 @@ export function formatMemCellMarkdown(cell) {
     `scene_title: ${yamlQuote(cell.sceneTitle)}`,
     'facts:',
     factsYaml || '  []',
-    `foresight_json: ${yamlQuote(foresightJson)}`,
-    '---',
+  ];
+  if (sourceIds.length) {
+    lines.push('source_ids:');
+    for (const id of sourceIds) lines.push(`  - ${yamlQuote(id)}`);
+  }
+  if (cell.speaker) lines.push(`speaker: ${yamlQuote(cell.speaker)}`);
+  if (cell.factType) lines.push(`fact_type: ${yamlQuote(cell.factType)}`);
+  if (cell.eventTime) lines.push(`event_time: ${yamlQuote(cell.eventTime)}`);
+  if (cell.validUntil) lines.push(`valid_until: ${yamlQuote(cell.validUntil)}`);
+  if (cell.supersedes) lines.push(`supersedes: ${yamlQuote(cell.supersedes)}`);
+  if (cell.traceable === false) lines.push('traceable: false');
+  else if (sourceIds.length) lines.push('traceable: true');
+  lines.push(`foresight_json: ${yamlQuote(foresightJson)}`, '---');
+  return [
+    ...lines,
     '',
     `# MemCell ${cell.cellId}`,
     '',
@@ -124,6 +145,24 @@ export function parseMemCellMarkdown(md) {
     }
   }
   const episodeMatch = text.match(/## Episode\s*\n+([\s\S]*?)(?=\n## |\n*$)/);
+  const sourceIds = [];
+  if (fm) {
+    let inSources = false;
+    for (const line of fm[1].split('\n')) {
+      if (/^source_ids:/.test(line)) {
+        inSources = true;
+        continue;
+      }
+      if (inSources) {
+        const item = line.match(/^\s*-\s+(.+)$/);
+        if (item) {
+          sourceIds.push(item[1].trim().replace(/^["']|["']$/g, ''));
+          continue;
+        }
+        inSources = false;
+      }
+    }
+  }
   return {
     cell_id: meta.cell_id || '',
     session_id: meta.session_id || '',
@@ -133,7 +172,19 @@ export function parseMemCellMarkdown(md) {
     facts,
     foresight,
     episode: episodeMatch ? episodeMatch[1].trim() : '',
+    source_ids: sourceIds,
+    speaker: meta.speaker || '',
+    fact_type: meta.fact_type || '',
+    event_time: meta.event_time || '',
+    valid_until: meta.valid_until || '',
+    supersedes: meta.supersedes || '',
+    traceable: meta.traceable === 'false' ? false : sourceIds.length > 0,
   };
+}
+
+/** A cell with no source message ids must not be treated as a settled fact. */
+export function cellIsTraceable(cell) {
+  return !!(cell && cell.traceable !== false && Array.isArray(cell.source_ids) && cell.source_ids.length > 0);
 }
 
 /**

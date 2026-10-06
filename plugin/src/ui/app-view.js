@@ -7,7 +7,7 @@
  */
 import { handleConfirmAccept, handleConfirmReject } from '../confirm-actions.js';
 import { renderMarkdownWithMath } from '../markdown-render.js';
-import { isUserSession, mountSidebar, sessionKey, sessionLabel } from './sidebar.js';
+import { mountSidebar, sessionKey } from './sidebar.js';
 import { mountChatPane } from './chat-pane.js';
 import { mountComposer } from './composer.js';
 import { placeholderFor, renderConnection } from './connection-view.js';
@@ -18,8 +18,6 @@ import { createChatController } from '../kernel/chat-controller.js';
 
 const ICON_MENU =
   '<svg class="aos-svg-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
-const ICON_NEW =
-  '<svg class="aos-svg-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
 
 function isMobileApp(app) {
   const body = typeof document !== 'undefined' ? document.body : null;
@@ -55,12 +53,7 @@ export function mountAgentApp(container, deps) {
     attr: { type: 'button', 'aria-label': '会话' },
   });
   menuBtn.innerHTML = ICON_MENU;
-  const titleEl = top.createDiv({ cls: 'aos-top-title', text: 'Agent' });
-  const newBtn = top.createEl('button', {
-    cls: 'aos-icon-btn aos-top-new',
-    attr: { type: 'button', 'aria-label': '新会话' },
-  });
-  newBtn.innerHTML = ICON_NEW;
+  const titleEl = top.createDiv({ cls: 'aos-top-title', text: '主会话' });
 
   const connection = main.createDiv({ cls: 'aos-connection' });
   const log = main.createDiv({ cls: 'aos-log' });
@@ -89,9 +82,7 @@ export function mountAgentApp(container, deps) {
   let unsubCtrl = () => {};
   const send = (text, opts) => ctrl.send(text, opts);
   const abort = () => ctrl.abort();
-  const newSession = () => ctrl.newSession();
   const openSession = (k, o) => ctrl.openSession(k, o);
-  const removeSession = (k) => ctrl.removeSession(k);
   const refreshSessions = () => ctrl.refreshSessions();
   const flushOutbox = () => ctrl.flushOutbox();
   const recoverFromBackground = () => ctrl.recoverFromBackground();
@@ -114,9 +105,8 @@ export function mountAgentApp(container, deps) {
     deps.Notice?.(action === 'accept' ? '已接受' : '已拒绝');
   };
   const sidebar = mountSidebar(sidebarEl, {
-    onNew: () => newSession(),
     onSelect: (key) => openSession(key),
-    onDelete: (key) => removeSession(key),
+    onSearch: (query) => ctrl.searchTimeline?.(query),
     onBack: () => {
       state.sidebarOpen = false;
       paintChrome();
@@ -147,7 +137,6 @@ export function mountAgentApp(container, deps) {
     mobile,
     onSend: (text) => send(text),
     onAbort: () => abort(),
-    onNew: () => newSession(),
     onThinking: (id) => plugin.setConnectionPrefs?.({ thinking: id }),
     onModel: (id) => plugin.setKernelModel?.(id),
     onApply: async ({ model, thinking }) => {
@@ -251,16 +240,13 @@ export function mountAgentApp(container, deps) {
     paintChrome();
   };
   menuBtn.onclick = () => toggleDrawer();
-  newBtn.onclick = () => newSession();
 
   function activeRow() {
     return state.sessions.find((row) => sessionKey(row) === state.activeKey) || null;
   }
 
   function emitTitle() {
-    const title = state.activeKey
-      ? sessionLabel(activeRow() || { key: state.activeKey, label: '新会话' })
-      : 'Agent';
+    const title = '主会话';
     if (titleEl) titleEl.setText(title);
     deps.onTitle?.(title);
   }
@@ -283,6 +269,8 @@ export function mountAgentApp(container, deps) {
       connection: status.state,
       syncHint: state.syncHint || '',
       now: Date.now(),
+      singleSession: !!plugin.settings.singleSession,
+      timelineHits: state.timelineHits || [],
     });
     thread.update({
       messages: state.messages,
@@ -555,7 +543,6 @@ export function mountAgentApp(container, deps) {
       root.remove();
     },
     toggleDrawer,
-    newSession,
     async reloadSession() {
       if (state.activeKey) await openSession(state.activeKey);
       await flushOutbox();

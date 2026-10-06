@@ -1,0 +1,514 @@
+[
+  {
+    "id": "follow-01",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "为什么",
+    "expect": "悬浮窗不要自动发请求"
+  },
+  {
+    "id": "follow-02",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "第二个呢",
+    "expect": "第一是不发请求，第二是不插话"
+  },
+  {
+    "id": "follow-03",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "继续",
+    "expect": "数学压轴还没做完"
+  },
+  {
+    "id": "follow-04",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "那个呢",
+    "expect": "笔记现场用提交时的快照"
+  },
+  {
+    "id": "follow-05",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "这个约束呢",
+    "expect": "切换笔记不代表换题"
+  },
+  {
+    "id": "follow-06",
+    "dimension": "follow-up",
+    "critical": false,
+    "check": "anaphora",
+    "query": "然后再说为什么",
+    "expect": "打开窗口不自动发请求"
+  },
+  {
+    "id": "return-01",
+    "dimension": "restore",
+    "critical": true,
+    "check": "restore",
+    "query": "回到刚才那个设计",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "return-02",
+    "dimension": "restore",
+    "critical": true,
+    "check": "restore",
+    "query": "回到上周那个方案",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "return-03",
+    "dimension": "restore",
+    "critical": true,
+    "check": "restore",
+    "query": "继续刚才的设计",
+    "expect": "切换笔记也不要插话"
+  },
+  {
+    "id": "return-04",
+    "dimension": "restore",
+    "critical": false,
+    "check": "restore",
+    "query": "那个方案还在吗",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "day-01",
+    "dimension": "cross-day",
+    "critical": false,
+    "check": "idle",
+    "query": "第二天继续",
+    "expect": "idle"
+  },
+  {
+    "id": "day-02",
+    "dimension": "cross-day",
+    "critical": false,
+    "check": "verbatim",
+    "query": "昨天原话是什么",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "day-03",
+    "dimension": "cross-day",
+    "critical": false,
+    "check": "verbatim",
+    "query": "你昨天怎么说的",
+    "expect": "不要插话"
+  },
+  {
+    "id": "device-01",
+    "dimension": "cross-device",
+    "critical": false,
+    "check": "order",
+    "query": "手机先说",
+    "expect": "电脑后说"
+  },
+  {
+    "id": "device-02",
+    "dimension": "cross-device",
+    "critical": false,
+    "check": "order",
+    "query": "电脑先写",
+    "expect": "手机来接"
+  },
+  {
+    "id": "restart-01",
+    "dimension": "restart",
+    "critical": true,
+    "check": "durable",
+    "query": "先把这句话记下",
+    "expect": "queued"
+  },
+  {
+    "id": "restart-02",
+    "dimension": "restart",
+    "critical": true,
+    "check": "no-duplicate-memory",
+    "query": "记下了",
+    "expect": "one-cell"
+  },
+  {
+    "id": "correct-01",
+    "dimension": "correct",
+    "critical": true,
+    "check": "correct",
+    "query": "不对，改成打开时也不要刷新",
+    "expect": "也不要刷新"
+  },
+  {
+    "id": "correct-02",
+    "dimension": "correct",
+    "critical": true,
+    "check": "correct",
+    "query": "不是这样，取消自动新建会话",
+    "expect": "取消自动新建会话"
+  },
+  {
+    "id": "correct-03",
+    "dimension": "correct",
+    "critical": true,
+    "check": "correct",
+    "query": "撤回刚才那条，改成只保留一条时间线",
+    "expect": "只保留一条时间线"
+  },
+  {
+    "id": "correct-04",
+    "dimension": "correct",
+    "critical": true,
+    "check": "supersede",
+    "query": "不对，旧方案作废，改成只保留一条时间线",
+    "expect": "只保留一条时间线"
+  },
+  {
+    "id": "cancel-01",
+    "dimension": "cancel",
+    "critical": true,
+    "check": "cancel",
+    "query": "算了，这个计划不做了",
+    "expect": ""
+  },
+  {
+    "id": "cancel-02",
+    "dimension": "cancel",
+    "critical": true,
+    "check": "cancel",
+    "query": "取消今晚的模考安排",
+    "expect": ""
+  },
+  {
+    "id": "suggest-01",
+    "dimension": "unaccepted",
+    "critical": true,
+    "check": "ignore-assistant",
+    "query": "今天先看几何",
+    "expect": "删除按钮"
+  },
+  {
+    "id": "suggest-02",
+    "dimension": "unaccepted",
+    "critical": true,
+    "check": "ignore-assistant",
+    "query": "先把悬浮窗定下来",
+    "expect": "再加一个话题列表"
+  },
+  {
+    "id": "suggest-03",
+    "dimension": "unaccepted",
+    "critical": true,
+    "check": "ignore-assistant",
+    "query": "决定：笔记切换不发请求",
+    "expect": "建议做成按钮"
+  },
+  {
+    "id": "foresight-01",
+    "dimension": "foresight",
+    "critical": true,
+    "check": "expired",
+    "query": "下周模考",
+    "expect": "2020-01-01"
+  },
+  {
+    "id": "foresight-02",
+    "dimension": "foresight",
+    "critical": false,
+    "check": "expired",
+    "query": "旧预判已经过期",
+    "expect": "2024-01-01"
+  },
+  {
+    "id": "note-01",
+    "dimension": "note-switch",
+    "critical": false,
+    "check": "not-topic",
+    "query": "我只是换了一篇笔记",
+    "expect": "悬浮窗"
+  },
+  {
+    "id": "note-02",
+    "dimension": "note-switch",
+    "critical": false,
+    "check": "snapshot",
+    "query": "用我发送时的那段",
+    "expect": "提交时的快照"
+  },
+  {
+    "id": "note-03",
+    "dimension": "note-switch",
+    "critical": false,
+    "check": "snapshot",
+    "query": "后来改过的句子不要算进来",
+    "expect": "发送时"
+  },
+  {
+    "id": "attach-01",
+    "dimension": "long-input",
+    "critical": true,
+    "check": "overflow",
+    "query": "太长",
+    "expect": "拆分"
+  },
+  {
+    "id": "attach-02",
+    "dimension": "long-input",
+    "critical": false,
+    "check": "budget",
+    "query": "一千轮之后",
+    "expect": "32k"
+  },
+  {
+    "id": "tool-01",
+    "dimension": "tools",
+    "critical": false,
+    "check": "tool-pair",
+    "query": "工具结果还在",
+    "expect": "paired"
+  },
+  {
+    "id": "tool-02",
+    "dimension": "tools",
+    "critical": false,
+    "check": "tool-pair",
+    "query": "压缩后工具还配对",
+    "expect": "paired"
+  },
+  {
+    "id": "compact-01",
+    "dimension": "compact",
+    "critical": false,
+    "check": "delegate",
+    "query": "压缩交给宿主",
+    "expect": "delegated"
+  },
+  {
+    "id": "compact-02",
+    "dimension": "compact",
+    "critical": false,
+    "check": "delegate",
+    "query": "其他渠道不受影响",
+    "expect": "passthrough"
+  },
+  {
+    "id": "form-01",
+    "dimension": "formation-fail",
+    "critical": true,
+    "check": "retry",
+    "query": "模型失败",
+    "expect": "原文还在"
+  },
+  {
+    "id": "form-02",
+    "dimension": "formation-fail",
+    "critical": true,
+    "check": "retry",
+    "query": "再试一次不能有第二条记忆",
+    "expect": "one-cell"
+  },
+  {
+    "id": "vector-01",
+    "dimension": "vector-down",
+    "critical": false,
+    "check": "degrade",
+    "query": "向量服务挂了",
+    "expect": "vector-unavailable"
+  },
+  {
+    "id": "vector-02",
+    "dimension": "vector-down",
+    "critical": false,
+    "check": "degrade",
+    "query": "只能用关键词",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "vector-03",
+    "dimension": "vector-down",
+    "critical": false,
+    "check": "degrade",
+    "query": "没有向量也要回答得了近期",
+    "expect": "近期"
+  },
+  {
+    "id": "index-01",
+    "dimension": "index",
+    "critical": true,
+    "check": "index-isolation",
+    "query": "重建 wiki",
+    "expect": "episode-kept"
+  },
+  {
+    "id": "index-02",
+    "dimension": "index",
+    "critical": true,
+    "check": "index-isolation",
+    "query": "不要删导航索引",
+    "expect": "index-kept"
+  },
+  {
+    "id": "migrate-01",
+    "dimension": "migration",
+    "critical": true,
+    "check": "resume",
+    "query": "迁移中断再跑",
+    "expect": "no-dup"
+  },
+  {
+    "id": "migrate-02",
+    "dimension": "migration",
+    "critical": true,
+    "check": "verbatim-keep",
+    "query": "没有哨兵的原句",
+    "expect": "就这一句"
+  },
+  {
+    "id": "migrate-03",
+    "dimension": "migration",
+    "critical": false,
+    "check": "split",
+    "query": "旧注入要分开存",
+    "expect": "这道题怎么做"
+  },
+  {
+    "id": "quote-01",
+    "dimension": "verbatim",
+    "critical": true,
+    "check": "timeline",
+    "query": "昨天原话是什么",
+    "expect": "不要自动发请求"
+  },
+  {
+    "id": "quote-02",
+    "dimension": "verbatim",
+    "critical": false,
+    "check": "timeline",
+    "query": "原话不要用摘要冒充",
+    "expect": "悬浮窗打开时不要发请求"
+  },
+  {
+    "id": "quote-03",
+    "dimension": "verbatim",
+    "critical": false,
+    "check": "timeline",
+    "query": "昨天原话里有没有这句",
+    "expect": "切换笔记也不要插话"
+  },
+  {
+    "id": "decide-01",
+    "dimension": "current-decision",
+    "critical": true,
+    "check": "current",
+    "query": "现在的决定是什么",
+    "expect": "只保留一条时间线"
+  },
+  {
+    "id": "decide-02",
+    "dimension": "current-decision",
+    "critical": true,
+    "check": "current",
+    "query": "别把旧方案说成现在的",
+    "expect": "不要新建会话"
+  },
+  {
+    "id": "decide-03",
+    "dimension": "current-decision",
+    "critical": true,
+    "check": "current",
+    "query": "区分暂停的设计和当前的数学",
+    "expect": "数学"
+  },
+  {
+    "id": "unknown-01",
+    "dimension": "abstain",
+    "critical": true,
+    "check": "abstain",
+    "query": "我妈的生日是哪天",
+    "expect": "不知道"
+  },
+  {
+    "id": "unknown-02",
+    "dimension": "abstain",
+    "critical": true,
+    "check": "abstain",
+    "query": "没有证据就别编",
+    "expect": "不确定"
+  },
+  {
+    "id": "unknown-03",
+    "dimension": "abstain",
+    "critical": false,
+    "check": "abstain",
+    "query": "库里没有这件事",
+    "expect": "没有这条记忆"
+  },
+  {
+    "id": "task-01",
+    "dimension": "task-restore",
+    "critical": true,
+    "check": "restore",
+    "query": "回到刚才那个设计",
+    "expect": "未完成"
+  },
+  {
+    "id": "task-02",
+    "dimension": "task-restore",
+    "critical": false,
+    "check": "snapshot",
+    "query": "笔记现场还是发送时那版",
+    "expect": "快照"
+  },
+  {
+    "id": "task-03",
+    "dimension": "task-restore",
+    "critical": false,
+    "check": "lag",
+    "query": "状态落后时带上还没消化的原文",
+    "expect": "原文"
+  },
+  {
+    "id": "soul-01",
+    "dimension": "injection",
+    "critical": true,
+    "check": "soul-once",
+    "query": "人格不要写进用户历史",
+    "expect": "IDENTITY"
+  },
+  {
+    "id": "soul-02",
+    "dimension": "injection",
+    "critical": true,
+    "check": "current-once",
+    "query": "本轮不要出现两次",
+    "expect": "为什么"
+  },
+  {
+    "id": "boundary-01",
+    "dimension": "boundary",
+    "critical": true,
+    "check": "no-profile",
+    "query": "不能悄悄改画像",
+    "expect": "pending"
+  },
+  {
+    "id": "boundary-02",
+    "dimension": "boundary",
+    "critical": false,
+    "check": "traceable",
+    "query": "没有来源就不能当事实",
+    "expect": "untraceable"
+  },
+  {
+    "id": "boundary-03",
+    "dimension": "boundary",
+    "critical": false,
+    "check": "source",
+    "query": "记忆要能指回消息",
+    "expect": "source_ids"
+  }
+]

@@ -283,6 +283,18 @@ export function createServiceClient(opts) {
       });
     },
 
+    searchTimeline(query) {
+      return request(`/v1/conversation/search?q=${encodeURIComponent(query || '')}`);
+    },
+
+    timelinePage({ before = 0, limit = 40 } = {}) {
+      return request(`/v1/conversation/messages?before=${before}&limit=${limit}`);
+    },
+
+    syncTimeline(afterSeq = 0) {
+      return request(`/v1/conversation/sync?afterSeq=${afterSeq}`);
+    },
+
     searchNotes(query, limit = 12) {
       return request(`/v1/notes/search?q=${encodeURIComponent(query)}&limit=${limit}`);
     },
