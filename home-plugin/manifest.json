@@ -1,0 +1,9 @@
+{
+  "id": "meinc-home",
+  "name": "首页",
+  "version": "0.12.0",
+  "minAppVersion": "1.5.0",
+  "description": "Minimal app launcher for Me.Inc — review queue, learning output, AI mailbox, journals, projects, library, Timebox.",
+  "author": "Me.Inc",
+  "isDesktopOnly": false
+}
