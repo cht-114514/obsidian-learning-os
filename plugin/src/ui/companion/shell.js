@@ -10,6 +10,7 @@ import { placeholderFor } from '../connection-view.js';
 import { captureContextSnapshot, liveContextLabel } from '../../context-snapshot.js';
 import { buildApplyPreview, applyCompanionEdit } from '../../companion-apply.js';
 import {
+  companionPresentation,
   defaultCapsulePos,
   loadCapsulePos,
   nextCompanionMode,
@@ -17,7 +18,8 @@ import {
   saveCapsulePos,
   shouldThawQuote,
 } from './layout.js';
-import { bindViewportListeners, navbarReservePx, readVisibleFrame } from '../mobile-insets.js';
+import { bindViewportListeners, navbarReservePx, planViewportBox } from '../mobile-insets.js';
+import { macLinkLabel } from '../delivery.js';
 import { loadSessionFromPath, SESSION_PATH } from '../../chat-history.js';
 
 const ICON_MORE =
@@ -49,6 +51,8 @@ export function createCompanionController(app, plugin, deps) {
   let composerHost = null;
   let contextEl = null;
   let titleEl = null;
+  let macEl = null;
+  let keyboardSettle = false;
   let quoteWrap = null;
   let quoteTextEl = null;
   let excerptEl = null;
@@ -214,9 +218,17 @@ export function createCompanionController(app, plugin, deps) {
     excerptEl.hidden = !text;
   }
 
+  function safePx(name) {
+    try {
+      const parsed = parseFloat(getComputedStyle(document.body).getPropertyValue(name).trim());
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   function currentFrame() {
     const override = typeof deps.previewViewport === 'function' ? deps.previewViewport() : deps.previewViewport;
-    const bodyStyle = getComputedStyle(document.body);
     let navStack = 0;
     if (mobile && !override) {
       const navEl = document.querySelector('.mobile-navbar');
@@ -226,12 +238,15 @@ export function createCompanionController(app, plugin, deps) {
       if (!navStack) navStack = 88;
     }
     const focused = !!composerHost?.querySelector('textarea')?.matches?.(':focus');
-    return readVisibleFrame({
+    if (focused) keyboardSettle = false;
+    return planViewportBox({
       innerWidth: window.innerWidth,
       innerHeight: window.innerHeight,
       viewport: override || window.visualViewport,
-      bodyStyle,
+      safeTop: safePx('--safe-area-inset-top'),
+      safeBottom: safePx('--safe-area-inset-bottom'),
       focused,
+      forceClosed: keyboardSettle && !focused,
       navStack,
       margin: 12,
     });
@@ -286,6 +301,7 @@ export function createCompanionController(app, plugin, deps) {
   function placePanel() {
     if (!panel || mode === 'collapsed') return;
     const frame = currentFrame();
+    panel.toggleClass('is-vv', !!frame.keyboardOpen);
     const room = Math.max(24, Math.min(96, frame.height - 148));
     composer?.setMaxInputHeight?.(room);
     if (mode === 'expanded') {
@@ -364,13 +380,28 @@ export function createCompanionController(app, plugin, deps) {
       plugin.connectionPrefs?.().model || ''
     );
     const status = connectionState();
+    const link = status.mac || macLinkLabel({
+      state: status.state,
+      needsPairing: status.needsPairing,
+      lastSeenAt: status.lastSeenAt || 0,
+      kernel: status.kernel || '',
+    });
+    if (macEl) {
+      macEl.setText(link.text);
+      macEl.className = `aos-mac-link is-${link.tone}`;
+    }
     const placeholder = status.state === 'live' ? '接着问…' : placeholderFor(status.state, name);
     composer?.setPlaceholder(placeholder);
-    const fullscreen = !!plugin.isChatViewActive?.();
-    root.toggleClass('is-hidden', fullscreen);
-    document.body.classList.toggle('aos-companion-open', mode !== 'collapsed' && !fullscreen);
-    if (fullscreen) unlockBackground();
+    const presentation = companionPresentation({ mode }, !!plugin.isChatViewActive?.());
+    root.toggleClass('is-covered', presentation.covered);
+    root.removeClass('is-hidden');
+    document.body.classList.toggle('aos-companion-open', mode !== 'collapsed' && !presentation.covered);
+    if (presentation.covered) unlockBackground();
     else if (mode === 'expanded') lockBackground();
+  }
+
+  function syncChatCover() {
+    syncUi();
   }
 
   function setMode(next) {
@@ -456,7 +487,9 @@ export function createCompanionController(app, plugin, deps) {
     panel.createDiv({ cls: 'aos-companion-pointer', attr: { 'aria-hidden': 'true' } });
     const head = panel.createDiv({ cls: 'aos-companion-head' });
     head.createSpan({ cls: 'aos-companion-mark', attr: { 'aria-hidden': 'true' } });
-    titleEl = head.createDiv({ cls: 'aos-companion-title', text: plugin.settings.agentName || 'Agent' });
+    const titleBlock = head.createDiv({ cls: 'aos-companion-titleblock' });
+    titleEl = titleBlock.createDiv({ cls: 'aos-companion-title', text: plugin.settings.agentName || 'Agent' });
+    macEl = titleBlock.createDiv({ cls: 'aos-mac-link', text: '正在连接 Mac' });
     const headActions = head.createDiv({ cls: 'aos-companion-head-actions' });
     iconButton(headActions, 'aos-companion-more', '更多', ICON_MORE, () => composer?.openMore?.());
     iconButton(headActions, 'aos-companion-expand', '展开对话', ICON_EXPAND, () => setMode('expanded'));
@@ -525,8 +558,10 @@ export function createCompanionController(app, plugin, deps) {
       onSend: (text) => submit(text),
       onAbort: () => ctrl().abort(),
       onFocus: () => {
+        keyboardSettle = false;
         freezeQuote();
         if (mode !== 'expanded') setMode('expanded');
+        place();
       },
       onThinking: (id) => plugin.setConnectionPrefs?.({ thinking: id }),
       onModel: (id) => plugin.setKernelModel?.(id),
@@ -543,6 +578,14 @@ export function createCompanionController(app, plugin, deps) {
       },
       true
     );
+    composerHost.addEventListener('focusout', () => {
+      place();
+      setTimeout(() => {
+        if (composerHost?.querySelector('textarea')?.matches?.(':focus')) return;
+        keyboardSettle = true;
+        place();
+      }, 600);
+    });
 
     capsule.addEventListener('click', () => {
       if (capsule.dataset.suppressClick === '1') {
@@ -647,7 +690,7 @@ export function createCompanionController(app, plugin, deps) {
     const onStructure = () => {
       if (!quoteFrozen) paintQuote();
       if (mode === 'peek') place();
-      syncUi();
+      syncChatCover();
     };
     const onEditor = () => {
       if (quoteFrozen) return;
@@ -776,6 +819,7 @@ export function createCompanionController(app, plugin, deps) {
     expand: () => setMode('expanded'),
     collapse: () => setMode('collapsed'),
     peek: () => setMode('peek'),
+    syncChatCover,
     openLegacyHistory,
   };
 }

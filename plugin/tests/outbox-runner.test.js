@@ -239,6 +239,43 @@ describe('outbox runner', () => {
     await flush;
     assert.ok(order.includes('end:slow'));
   });
+
+  it('retries a timed-out send and ignores the late original attempt', async () => {
+    const store = createMemorySessionStore();
+    let releaseFirst;
+    const gate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    let attempts = 0;
+    const runner = createOutboxRunner({
+      store,
+      isConnected: () => true,
+      send: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          await gate;
+          return { text: 'late' };
+        }
+        return { text: 'ok' };
+      },
+    });
+    runner.submit(turn);
+    const first = runner.flush();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(store.pendingFor('t1').status, 'sending');
+    const blocked = await runner.retry('t1', Date.now());
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.message, '正在发送中');
+    const sendingAt = store.pendingFor('t1').sendingAt;
+    const retried = await runner.retry('t1', sendingAt + 21_000);
+    assert.equal(retried.sent, 1);
+    assert.equal(attempts, 2);
+    assert.equal(store.pendingFor('t1').status, 'sent');
+    releaseFirst();
+    await first;
+    assert.equal(store.pendingFor('t1').status, 'sent');
+    assert.equal(attempts, 2);
+  });
 });
 
 describe('isRetryable', () => {

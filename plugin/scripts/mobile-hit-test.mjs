@@ -70,6 +70,8 @@ writeFileSync(
     z-index: 30;
     pointer-events: auto;
   }
+  body.aos-chat-active .fake-fab,
+  body.aos-chat-active .fake-dock { display: none !important; }
   .fake-dock {
     position: fixed;
     left: 16px;
@@ -163,7 +165,7 @@ async function runHitTest() {
     ok: hitsSend && hitsChip && hitsMenu && sheetStays && sent,
     sent,
     portal: host.classList.contains('is-portal'),
-    parentIsBody: host.parentElement === document.body,
+    inFlow: host.parentElement !== document.body,
     zIndex: getComputedStyle(host).zIndex,
     hitsSend,
     hitsChip,

@@ -3,6 +3,7 @@ import { renderMessageBody } from './message-body.js';
 import { formatManifest } from '../single-session.js';
 import { formatRelativeTime, textOfMessage } from './turns.js';
 import { parseApplyResponse } from '../intent.js';
+import { deliveryView, isDeliveryPlaceholder, visibleUserText } from './delivery.js';
 
 export { textOfMessage };
 
@@ -42,6 +43,8 @@ export function mountChatPane(el, deps) {
   const nodes = new Map();
   let signature = '';
   let stick = true;
+  let clock = 0;
+  let lastState = { messages: [], canContinue: false };
 
   const onScroll = () => {
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -85,6 +88,18 @@ export function mountChatPane(el, deps) {
     const discard = pending.createEl('button', { text: '忽略', attr: { type: 'button' } });
     discard.onclick = () => deps.onPendingAction?.(message, 'discard');
     const note = msg.createDiv({ cls: 'aos-pending-note' });
+    const delivery = role === 'user' ? msg.createDiv({ cls: 'aos-delivery' }) : null;
+    if (delivery) {
+      delivery.createSpan({ cls: 'aos-delivery-dot', attr: { 'aria-hidden': 'true' } });
+      delivery.createSpan({ cls: 'aos-delivery-label' });
+      delivery.createSpan({ cls: 'aos-delivery-detail' });
+      const retry = delivery.createEl('button', {
+        cls: 'aos-delivery-retry',
+        text: '重试',
+        attr: { type: 'button' },
+      });
+      retry.hidden = true;
+    }
     let manifest = null;
     let manifestBody = null;
     if (role === 'assistant') {
@@ -104,6 +119,7 @@ export function mountChatPane(el, deps) {
       regen,
       pending,
       note,
+      delivery,
       manifest,
       manifestBody,
       applyRow,
@@ -126,7 +142,13 @@ export function mountChatPane(el, deps) {
         isCurrent: () => node.gen === gen,
         renderMarkdown: deps.renderMarkdown,
         onConfirm: deps.onConfirm,
-      }).catch(() => {});
+      })
+        .then(() => {
+          if (node.gen !== gen || !stick) return;
+          el.scrollTop = el.scrollHeight;
+          onScroll();
+        })
+        .catch(() => {});
     };
     if (message.streaming && !immediate) {
       clearTimeout(node.timer);
@@ -135,6 +157,59 @@ export function mountChatPane(el, deps) {
     }
     clearTimeout(node.timer);
     run();
+  }
+
+  /** @type {Map<string, any>} */
+  let assistants = new Map();
+
+  function paintDelivery(node, message) {
+    const host = node.delivery;
+    if (!host) return;
+    const assistant = message.turnId ? assistants.get(message.turnId) : null;
+    const source = assistant || message;
+    const view = deliveryView(
+      {
+        status: source.turnStatus || message.turnStatus || '',
+        text: assistant?.text || '',
+        serverTurnId: source.serverTurnId || '',
+        reason: source.errorHint || source.reason || '',
+        errorHint: source.errorHint || '',
+        sendingAt: source.sendingAt || source.activity?.startedAt || message.ts || 0,
+        lastProgressAt: source.lastProgressAt || 0,
+      },
+      Date.now()
+    );
+    const show = view.state !== 'sent' && !!view.label;
+    host.hidden = !show;
+    host.className = `aos-delivery${show ? ` is-${view.state}` : ''}`;
+    const label = host.querySelector('.aos-delivery-label');
+    const detail = host.querySelector('.aos-delivery-detail');
+    const retry = host.querySelector('.aos-delivery-retry');
+    if (label) label.textContent = view.label || '';
+    if (detail) {
+      detail.textContent = view.detail || '';
+      detail.hidden = !view.detail;
+    }
+    if (retry) {
+      retry.hidden = !view.canRetry;
+      retry.onclick = () => deps.onPendingAction?.(assistant || message, 'retry');
+    }
+  }
+
+  function armClock(messages) {
+    const live = (messages || []).some((message) => {
+      const status = message?.turnStatus;
+      return status === 'sending' || status === 'queued' || status === 'preparing';
+    });
+    if (live && !clock) {
+      clock = setInterval(() => {
+        update(lastState);
+      }, 1000);
+    }
+    if (!live && clock) {
+      clearInterval(clock);
+      clock = 0;
+    }
   }
 
   function refresh(node, message, prev) {
@@ -168,12 +243,16 @@ export function mountChatPane(el, deps) {
       if (node.manifestBody) node.manifestBody.setText(detail);
     }
     const text = message.text || '';
+    const placeholder = role === 'assistant' && isDeliveryPlaceholder(text) && message.turnStatus && message.turnStatus !== 'sent';
+    node.group.hidden = !!placeholder;
     if (role === 'user') {
-      if (node.text !== text) {
+      const shown = visibleUserText(message);
+      if (node.text !== shown) {
         node.bubble.empty();
-        node.bubble.createDiv({ cls: 'aos-user-text', text });
-        node.text = text;
+        node.bubble.createDiv({ cls: 'aos-user-text', text: shown });
+        node.text = shown;
       }
+      paintDelivery(node, message);
       return;
     }
     if (node.applyRow && deps.onCompanionApply) {
@@ -215,43 +294,54 @@ export function mountChatPane(el, deps) {
     }
   }
 
-  return {
-    update(state) {
-      const messages = state.messages || [];
-      if (!messages.length) {
-        for (const node of nodes.values()) clearTimeout(node.timer);
-        groups.empty();
-        nodes.clear();
-        signature = '';
-        showEmpty(!!state.canContinue);
-        onScroll();
-        return;
-      }
-      const ids = messages.map((message) => message.id).join('|');
-      const force = ids !== signature;
-      if (force) {
-        for (const node of nodes.values()) clearTimeout(node.timer);
-        groups.empty();
-        nodes.clear();
-        signature = ids;
-        for (const message of messages) nodes.set(message.id, build(message));
-      }
-      let prev = null;
-      for (const message of messages) {
-        const node = nodes.get(message.id);
-        if (node) refresh(node, message, prev);
-        prev = message;
-      }
-      if (stick || force) el.scrollTop = el.scrollHeight;
-      onScroll();
-    },
-    scrollToEnd() {
-      stick = true;
-      el.scrollTop = el.scrollHeight;
-    },
-    destroy() {
+  function update(state) {
+    lastState = state || lastState;
+    const messages = state?.messages || [];
+    assistants = new Map();
+    for (const message of messages) {
+      if (message?.role === 'assistant' && message.turnId) assistants.set(message.turnId, message);
+    }
+    if (!messages.length) {
       for (const node of nodes.values()) clearTimeout(node.timer);
-      el.removeEventListener('scroll', onScroll);
-    },
-  };
+      groups.empty();
+      nodes.clear();
+      signature = '';
+      showEmpty(!!state?.canContinue);
+      onScroll();
+      armClock(messages);
+      return;
+    }
+    const ids = messages.map((message) => message.id).join('|');
+    const force = ids !== signature;
+    if (force) {
+      for (const node of nodes.values()) clearTimeout(node.timer);
+      groups.empty();
+      nodes.clear();
+      signature = ids;
+      for (const message of messages) nodes.set(message.id, build(message));
+    }
+    let prev = null;
+    for (const message of messages) {
+      const node = nodes.get(message.id);
+      if (node) refresh(node, message, prev);
+      prev = message;
+    }
+    if (stick || force) el.scrollTop = el.scrollHeight;
+    onScroll();
+    armClock(messages);
+  }
+
+  function scrollToEnd() {
+    stick = true;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function destroy() {
+    if (clock) clearInterval(clock);
+    clock = 0;
+    for (const node of nodes.values()) clearTimeout(node.timer);
+    el.removeEventListener('scroll', onScroll);
+  }
+
+  return { update, scrollToEnd, destroy };
 }

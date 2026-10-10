@@ -132,25 +132,144 @@ export function readVisibleFrame(opts = {}) {
 }
 
 /**
+ * How far the chat shell must lift so its bottom meets the visual viewport.
+ *
+ * The shell is a flex column. This overlap becomes one CSS variable
+ * (`--aos-kb`); the composer is the last flex child and is not `position: fixed`.
+ *
+ * If Obsidian has already shrunk the leaf to the visual viewport, the gap is 0
+ * and we add nothing — we do not stack a second keyboard offset on top of
+ * Obsidian's own resize. A stuck gap after the keyboard is dismissed is cleared
+ * by `forceClosed` (blur / settle), not by snapping mid-animation.
+ *
+ * @param {{
+ *   shellHeight?: number,
+ *   innerHeight?: number,
+ *   viewport?: { height?: number, offsetTop?: number, scale?: number } | null,
+ *   safeBottom?: number,
+ *   focused?: boolean,
+ *   forceClosed?: boolean,
+ *   cssKeyboard?: number,
+ * }} [opts]
+ */
+export function readShellKeyboard(opts = {}) {
+  if (opts.forceClosed) return { overlap: 0, keyboardOpen: false, settled: true };
+  const safe = Math.max(0, Number(opts.safeBottom) || 0);
+  const slack = safe + 12;
+  const vv = opts.viewport || null;
+  const scale = Number(vv?.scale);
+  if (vv && Number.isFinite(scale) && Math.abs(scale - 1) > 0.02) {
+    return { overlap: 0, keyboardOpen: false, settled: true };
+  }
+  const height0 = Math.max(0, Number(opts.innerHeight) || 0);
+  const shell = Math.max(0, Number(opts.shellHeight) || 0);
+  if (vv && Number(vv.height) > 0 && height0) {
+    const viewH = Math.max(0, Number(vv.height) || 0);
+    const gap = Math.max(0, height0 - viewH - (Number(vv.offsetTop) || 0));
+    if (gap <= slack) return { overlap: 0, keyboardOpen: false, settled: true };
+    // The leaf is already as short as the visual viewport: Obsidian moved it.
+    if (shell > 0 && shell <= viewH + slack) return { overlap: 0, keyboardOpen: false, settled: true };
+    return { overlap: Math.round(gap), keyboardOpen: true, settled: false };
+  }
+  if (opts.focused) {
+    const gap = Math.max(0, Number(opts.cssKeyboard) || 0);
+    if (gap > slack) return { overlap: Math.round(gap), keyboardOpen: true, settled: false };
+  }
+  return { overlap: 0, keyboardOpen: false, settled: true };
+}
+
+/**
+ * Panel rectangle pinned to the visual viewport.
+ * The viewport already ends above the keyboard, so the keyboard is not
+ * subtracted a second time. After blur, `forceClosed` drops a stale gap and
+ * the panel uses the full layout height (safe area + navbar once).
+ *
+ * @param {{
+ *   innerWidth?: number,
+ *   innerHeight?: number,
+ *   viewport?: { width?: number, height?: number, offsetTop?: number, offsetLeft?: number, scale?: number } | null,
+ *   safeTop?: number,
+ *   safeBottom?: number,
+ *   navStack?: number,
+ *   margin?: number,
+ *   focused?: boolean,
+ *   forceClosed?: boolean,
+ * }} [opts]
+ */
+export function planViewportBox(opts = {}) {
+  const margin = Math.max(0, opts.margin == null ? 12 : Number(opts.margin) || 0);
+  const width0 = Math.max(0, Number(opts.innerWidth) || 0);
+  const height0 = Math.max(0, Number(opts.innerHeight) || 0);
+  const safeTop = Math.max(0, Number(opts.safeTop) || 0);
+  const safeBottom = Math.max(0, Number(opts.safeBottom) || 0);
+  const navStack = Math.max(0, Number(opts.navStack) || 0);
+  const closed = () => {
+    const topInset = margin + safeTop;
+    const bottomInset = Math.round(safeBottom + navStack);
+    return {
+      left: margin,
+      top: topInset,
+      width: Math.max(0, Math.round(width0 - margin * 2)),
+      height: Math.max(0, Math.round(height0 - topInset - bottomInset)),
+      keyboardPx: 0,
+      keyboardOpen: false,
+      bottomInset,
+      settled: true,
+    };
+  };
+  if (opts.forceClosed) return closed();
+  const vv = opts.viewport || null;
+  const scale = Number(vv?.scale);
+  const zoomed = vv && Number.isFinite(scale) && Math.abs(scale - 1) > 0.02;
+  if (!vv || !width0 || !height0 || zoomed) return closed();
+  const originLeft = Number(vv.offsetLeft) || 0;
+  const originTop = Number(vv.offsetTop) || 0;
+  const viewW = Math.max(0, Number(vv.width) || width0);
+  const viewH = Math.max(0, Number(vv.height) || height0);
+  const gap = Math.max(0, height0 - viewH - originTop);
+  const slack = safeBottom + 12;
+  if (gap <= slack) return closed();
+  const topInset = margin;
+  const bottomInset = 8;
+  return {
+    left: Math.round(originLeft + margin),
+    top: Math.round(originTop + topInset),
+    width: Math.max(0, Math.round(viewW - margin * 2)),
+    height: Math.max(0, Math.round(viewH - topInset - bottomInset)),
+    keyboardPx: Math.round(gap),
+    keyboardOpen: true,
+    bottomInset,
+    settled: false,
+  };
+}
+
+/**
  * Coalesce viewport events onto one animation frame. Caller removes the listeners.
+ * A change that arrives while a frame is already queued is kept and run next,
+ * so a keyboard animation is not dropped.
  * @param {() => void} onChange
  */
 export function bindViewportListeners(onChange) {
   let frame = 0;
   let timer = 0;
+  let dirty = false;
   const schedule = () => {
-    if (frame || timer) return;
-    if (typeof requestAnimationFrame === 'function') {
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        onChange();
-      });
+    if (frame || timer) {
+      dirty = true;
       return;
     }
-    timer = setTimeout(() => {
+    const run = () => {
+      frame = 0;
       timer = 0;
+      dirty = false;
       onChange();
-    }, 16);
+      if (dirty) schedule();
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      frame = requestAnimationFrame(run);
+      return;
+    }
+    timer = setTimeout(run, 16);
   };
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;
   vv?.addEventListener('resize', schedule);

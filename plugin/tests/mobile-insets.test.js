@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { navbarReservePx, resolveMobileKeyboardPx, composerOffsetPx, readVisibleFrame } from '../src/ui/mobile-insets.js';
+import { navbarReservePx, resolveMobileKeyboardPx, composerOffsetPx, readVisibleFrame, readShellKeyboard, planViewportBox } from '../src/ui/mobile-insets.js';
 
 test('resolveMobileKeyboardPx prefers Obsidian --keyboard-height', () => {
   const style = {
@@ -166,6 +166,83 @@ test('readVisibleFrame falls back to --keyboard-height only while focused', () =
   assert.equal(closed.keyboardOpen, false);
   assert.equal(closed.bottomInset, 34 + 88);
   assert.equal(closed.height, 844 - (12 + 47) - closed.bottomInset);
+});
+
+test('readShellKeyboard follows the visual viewport and does not add a second keyboard offset', () => {
+  const open = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 500, offsetTop: 0, scale: 1 },
+    safeBottom: 34,
+    focused: true,
+  });
+  assert.equal(open.keyboardOpen, true);
+  assert.equal(open.overlap, 352);
+  assert.equal(open.settled, false);
+  // Obsidian already shrank the leaf to the visual viewport: overlap stays 0.
+  const resized = readShellKeyboard({
+    shellHeight: 500,
+    innerHeight: 852,
+    viewport: { height: 500, offsetTop: 0, scale: 1 },
+    safeBottom: 34,
+    focused: true,
+  });
+  assert.equal(resized.overlap, 0);
+  assert.equal(resized.keyboardOpen, false);
+});
+
+test('readShellKeyboard snaps a stuck gap only after blur asks it to settle', () => {
+  const stuck = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 520, offsetTop: 40, scale: 1 },
+    safeBottom: 34,
+    focused: false,
+  });
+  assert.equal(stuck.keyboardOpen, true);
+  assert.ok(stuck.overlap > 0);
+  const settled = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 520, offsetTop: 40, scale: 1 },
+    safeBottom: 34,
+    focused: false,
+    forceClosed: true,
+  });
+  assert.equal(settled.overlap, 0);
+  assert.equal(settled.settled, true);
+});
+
+test('planViewportBox tracks the visual viewport and returns to the full frame when settled', () => {
+  const open = planViewportBox({
+    innerWidth: 390,
+    innerHeight: 844,
+    viewport: { width: 390, height: 420, offsetTop: 0, offsetLeft: 0, scale: 1 },
+    safeTop: 47,
+    safeBottom: 34,
+    navStack: 88,
+    margin: 12,
+    focused: true,
+  });
+  assert.equal(open.keyboardOpen, true);
+  assert.equal(open.bottomInset, 8);
+  assert.equal(open.top, 12);
+  assert.equal(open.height, 400);
+  const closed = planViewportBox({
+    innerWidth: 390,
+    innerHeight: 844,
+    viewport: { width: 390, height: 800, offsetTop: 20, offsetLeft: 0, scale: 1 },
+    safeTop: 47,
+    safeBottom: 34,
+    navStack: 88,
+    margin: 12,
+    focused: false,
+    forceClosed: true,
+  });
+  assert.equal(closed.keyboardOpen, false);
+  assert.equal(closed.top, 12 + 47);
+  assert.equal(closed.bottomInset, 34 + 88);
+  assert.equal(closed.height, 844 - closed.top - closed.bottomInset);
 });
 
 test('navbarReservePx prefers viewport stack over box estimate', () => {

@@ -9,7 +9,7 @@ import {
 } from '../src/ui/turns.js';
 import { groupSessions, isUserSession, sessionLabel, sessionPreview } from '../src/ui/sidebar.js';
 import { describeTool, formatDuration, workHeadline } from '../src/ui/work-run.js';
-import { enterInsertsNewline, nextComposerAction } from '../src/ui/composer.js';
+import { enterInsertsNewline, nextComposerAction, shouldIgnoreEnter } from '../src/ui/composer.js';
 import { reduceActivity } from '../src/kernel/activity.js';
 
 describe('stripInjectedContext', () => {
@@ -204,6 +204,16 @@ describe('composer actions', () => {
     assert.equal(nextComposerAction(true, 'submit'), 'ignore');
     assert.equal(enterInsertsNewline(true), true);
     assert.equal(enterInsertsNewline(false), false);
+  });
+
+  it('does not treat an IME confirm Enter as send', () => {
+    const enter = { key: 'Enter', keyCode: 13 };
+    assert.equal(shouldIgnoreEnter(enter, { composing: true }), true);
+    assert.equal(shouldIgnoreEnter({ key: 'Enter', isComposing: true }), true);
+    assert.equal(shouldIgnoreEnter({ key: 'Enter', keyCode: 229 }), true);
+    assert.equal(shouldIgnoreEnter(enter, { compositionEndedAt: 1_000 }, 1_050), true);
+    assert.equal(shouldIgnoreEnter(enter, { compositionEndedAt: 1_000 }, 1_200), false);
+    assert.equal(shouldIgnoreEnter({ key: 'Enter', shiftKey: true }, { composing: true }), false);
   });
 });
 
