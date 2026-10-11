@@ -3,9 +3,270 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
-// timebox.js
+// home-plugin/editor-scroll.js
+var require_editor_scroll = __commonJS({
+  "home-plugin/editor-scroll.js"(exports2, module2) {
+    function reconcileEditorScroll(input = {}) {
+      const pinned = Number.isFinite(input.pinned) ? input.pinned : 0;
+      const scrolled = Number.isFinite(input.scrolled) ? input.scrolled : 0;
+      const maxScroll = Number.isFinite(input.maxScroll) ? Math.max(0, input.maxScroll) : Infinity;
+      const clamp = (n) => {
+        const value = Math.max(0, n);
+        return value > maxScroll ? maxScroll : value;
+      };
+      const { caretTop, caretBottom, viewTop, viewBottom } = input;
+      const margin = Number.isFinite(input.margin) ? input.margin : 12;
+      if (![caretTop, caretBottom, viewTop, viewBottom].every((n) => Number.isFinite(n))) {
+        return clamp(pinned);
+      }
+      const caretHeight = Math.max(0, caretBottom - caretTop);
+      const offsetTop = scrolled + (caretTop - viewTop);
+      const viewHeight = viewBottom - viewTop;
+      let minS = offsetTop + caretHeight + margin - viewHeight;
+      let maxS = offsetTop - margin;
+      if (minS > maxS) {
+        minS = offsetTop - margin;
+        maxS = minS;
+      }
+      return clamp(Math.min(maxS, Math.max(minS, pinned)));
+    }
+    function caretClientFromMirror({ areaTop, areaScrollTop, mirrorTop, markTop, markHeight }) {
+      const top = areaTop + (markTop - mirrorTop) - areaScrollTop;
+      const height = Number.isFinite(markHeight) ? markHeight : 0;
+      return { top, bottom: top + height };
+    }
+    function visibleBand({ boxTop, boxBottom, viewportOffset = 0, viewportHeight = Infinity }) {
+      const top = Math.max(boxTop, viewportOffset);
+      const limit = Number.isFinite(viewportHeight) ? viewportOffset + viewportHeight : Infinity;
+      const bottom = Math.min(boxBottom, limit);
+      return { top, bottom: Math.max(top, bottom) };
+    }
+    function watchEditorScroll2(root) {
+      if (!root || root.dataset.editorScroll === "1") return;
+      root.dataset.editorScroll = "1";
+      root.addEventListener("focusin", (event) => {
+        const area = event.target;
+        if (!area || area.tagName !== "TEXTAREA" || area.dataset.editorScroll === "1") return;
+        area.dataset.editorScroll = "1";
+        attachEditorScroll(area, root);
+      });
+    }
+    function attachEditorScroll(area, root) {
+      let pinnedScroll = root.scrollTop || 0;
+      let pinnedArea = area.scrollTop || 0;
+      let fresh = false;
+      let touching = false;
+      let frame = 0;
+      let timer = 0;
+      let writing = false;
+      let typing = false;
+      const snapshot = () => {
+        if (fresh || !area.isConnected) return;
+        pinnedScroll = root.isConnected ? root.scrollTop : pinnedScroll;
+        pinnedArea = area.scrollTop;
+        fresh = true;
+      };
+      const measure = () => measureTextareaCaret(area);
+      const apply = () => {
+        if (writing || touching || !area.isConnected || !root.isConnected) return;
+        if (typeof document !== "undefined" && document.activeElement !== area) return;
+        writing = true;
+        try {
+          if (area.dataset.composing === "1") {
+            writeScroll(root, pinnedScroll);
+            writeScroll(area, pinnedArea);
+            return;
+          }
+          const caret = measure();
+          const areaBox = area.getBoundingClientRect();
+          const areaNext = reconcileEditorScroll({
+            pinned: pinnedArea,
+            scrolled: area.scrollTop,
+            maxScroll: Math.max(0, area.scrollHeight - area.clientHeight),
+            caretTop: caret?.top,
+            caretBottom: caret?.bottom,
+            viewTop: areaBox.top,
+            viewBottom: areaBox.bottom
+          });
+          const areaDelta = areaNext - area.scrollTop;
+          writeScroll(area, areaNext);
+          const shifted = caret ? { top: caret.top - areaDelta, bottom: caret.bottom - areaDelta } : null;
+          const band = readVisibleBand(root);
+          const next = reconcileEditorScroll({
+            pinned: pinnedScroll,
+            scrolled: root.scrollTop,
+            maxScroll: Math.max(0, root.scrollHeight - root.clientHeight),
+            caretTop: shifted?.top,
+            caretBottom: shifted?.bottom,
+            viewTop: band.top,
+            viewBottom: band.bottom
+          });
+          writeScroll(root, next);
+          pinnedArea = areaNext;
+          pinnedScroll = next;
+        } finally {
+          writing = false;
+        }
+      };
+      const schedule = () => {
+        if (typeof requestAnimationFrame !== "function") {
+          apply();
+          fresh = false;
+          typing = false;
+          return;
+        }
+        cancelAnimationFrame(frame);
+        clearTimeout(timer);
+        frame = requestAnimationFrame(() => {
+          apply();
+          frame = requestAnimationFrame(apply);
+        });
+        timer = setTimeout(() => {
+          apply();
+          fresh = false;
+          typing = false;
+        }, 50);
+      };
+      area._syncEditorScroll = schedule;
+      area.addEventListener("focus", () => {
+        fresh = false;
+        snapshot();
+      });
+      area.addEventListener("keydown", snapshot);
+      area.addEventListener("beforeinput", snapshot);
+      area.addEventListener("compositionstart", () => {
+        area.dataset.composing = "1";
+        snapshot();
+      });
+      area.addEventListener("compositionend", () => {
+        delete area.dataset.composing;
+        typing = true;
+        schedule();
+      });
+      area.addEventListener("input", () => {
+        typing = true;
+        schedule();
+      });
+      const hold = () => {
+        touching = true;
+      };
+      const release = () => {
+        touching = false;
+        fresh = false;
+        snapshot();
+      };
+      area.addEventListener("touchstart", hold, { passive: true });
+      area.addEventListener("touchend", release, { passive: true });
+      area.addEventListener("touchcancel", release, { passive: true });
+      root.addEventListener("touchstart", hold, { passive: true });
+      root.addEventListener("touchend", release, { passive: true });
+      root.addEventListener("touchcancel", release, { passive: true });
+      snapshot();
+      const onViewport = () => {
+        if (!area.isConnected) {
+          window.visualViewport?.removeEventListener("scroll", onViewport);
+          window.visualViewport?.removeEventListener("resize", onViewport);
+          clearTimeout(timer);
+          cancelAnimationFrame(frame);
+          return;
+        }
+        if (!typing || document.activeElement !== area) return;
+        schedule();
+      };
+      window.visualViewport?.addEventListener("scroll", onViewport);
+      window.visualViewport?.addEventListener("resize", onViewport);
+    }
+    function writeScroll(el, next) {
+      if (!el || !Number.isFinite(next) || Math.abs(el.scrollTop - next) < 1) return;
+      el.scrollTop = next;
+    }
+    function readVisibleBand(scroller) {
+      const box = scroller.getBoundingClientRect();
+      const vv = window.visualViewport;
+      if (!vv) return { top: box.top, bottom: box.bottom };
+      return visibleBand({
+        boxTop: box.top,
+        boxBottom: box.bottom,
+        viewportOffset: vv.offsetTop,
+        viewportHeight: vv.height
+      });
+    }
+    var mirrorHost = null;
+    var mirror = null;
+    var mirrorText = null;
+    var mirrorMark = null;
+    function measureTextareaCaret(area) {
+      if (typeof document === "undefined") return null;
+      ensureMirror();
+      const style = getComputedStyle(area);
+      const width = area.getBoundingClientRect().width;
+      if (width < 1) return null;
+      mirror.style.boxSizing = "border-box";
+      mirror.style.width = `${width}px`;
+      mirror.style.padding = style.padding;
+      mirror.style.borderStyle = "solid";
+      mirror.style.borderColor = "transparent";
+      mirror.style.borderWidth = `${style.borderTopWidth} ${style.borderRightWidth} ${style.borderBottomWidth} ${style.borderLeftWidth}`;
+      mirror.style.fontFamily = style.fontFamily;
+      mirror.style.fontSize = style.fontSize;
+      mirror.style.fontWeight = style.fontWeight;
+      mirror.style.fontStyle = style.fontStyle;
+      mirror.style.lineHeight = style.lineHeight;
+      mirror.style.letterSpacing = style.letterSpacing;
+      mirror.style.whiteSpace = "pre-wrap";
+      mirror.style.overflowWrap = "break-word";
+      mirror.style.wordBreak = "break-word";
+      const end = area.selectionStart ?? 0;
+      mirrorText.data = area.value.slice(0, end);
+      mirrorMark.textContent = area.value.slice(end, end + 1) || "​";
+      const markRect = mirrorMark.getBoundingClientRect();
+      const mirrorRect = mirror.getBoundingClientRect();
+      const areaRect = area.getBoundingClientRect();
+      return caretClientFromMirror({
+        areaTop: areaRect.top,
+        areaScrollTop: area.scrollTop,
+        mirrorTop: mirrorRect.top,
+        markTop: markRect.top,
+        markHeight: markRect.height
+      });
+    }
+    function ensureMirror() {
+      if (mirrorHost?.isConnected) return;
+      mirrorHost = document.createElement("div");
+      mirrorHost.setAttribute("aria-hidden", "true");
+      mirrorHost.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;";
+      mirror = document.createElement("div");
+      mirror.style.position = "absolute";
+      mirror.style.left = "0";
+      mirror.style.top = "0";
+      mirrorText = document.createTextNode("");
+      mirrorMark = document.createElement("span");
+      mirror.appendChild(mirrorText);
+      mirror.appendChild(mirrorMark);
+      mirrorHost.appendChild(mirror);
+      document.body.appendChild(mirrorHost);
+    }
+    function keepScroll(node, fn) {
+      const scroller = node?.closest?.(".meinc-home-scroll");
+      const top = scroller ? scroller.scrollTop : null;
+      fn();
+      if (scroller && top != null && Math.abs(scroller.scrollTop - top) >= 1) {
+        scroller.scrollTop = top;
+      }
+    }
+    module2.exports = {
+      caretClientFromMirror,
+      keepScroll,
+      reconcileEditorScroll,
+      visibleBand,
+      watchEditorScroll: watchEditorScroll2
+    };
+  }
+});
+
+// home-plugin/timebox.js
 var require_timebox = __commonJS({
-  "timebox.js"(exports2, module2) {
+  "home-plugin/timebox.js"(exports2, module2) {
     var TIMEBOX_PRESETS = [5, 10, 15, 25, 45];
     var TIMEBOX_RECENT_MAX = 5;
     var TIMEBOX_MIN_MS = 6e4;
@@ -797,9 +1058,9 @@ var require_timebox = __commonJS({
   }
 });
 
-// compound.js
+// home-plugin/compound.js
 var require_compound = __commonJS({
-  "compound.js"(exports2, module2) {
+  "home-plugin/compound.js"(exports2, module2) {
     var COMPOUND_DIR2 = "资料库/复利";
     var COMPOUND_TITLE2 = "复利";
     var COMPOUND_FIELD_MAX2 = 2e3;
@@ -1048,9 +1309,9 @@ var require_compound = __commonJS({
   }
 });
 
-// review-queue.js
+// home-plugin/review-queue.js
 var require_review_queue = __commonJS({
-  "review-queue.js"(exports2, module2) {
+  "home-plugin/review-queue.js"(exports2, module2) {
     var REVIEW_LEDGER_PATH2 = "agent-inbox/meinc-home/review-ledger.json";
     var HONGLOU_PUSH_FOLDER2 = "基础学科/语文/红楼梦/每日推送";
     var LIBRARY_ROOT2 = "资料库";
@@ -1321,9 +1582,9 @@ var require_review_queue = __commonJS({
   }
 });
 
-// activity.js
+// home-plugin/activity.js
 var require_activity = __commonJS({
-  "activity.js"(exports2, module2) {
+  "home-plugin/activity.js"(exports2, module2) {
     var ACTIVITY_PREFIX = "activity-";
     function contentHash(text) {
       const s = String(text ?? "");
@@ -1513,9 +1774,9 @@ var require_activity = __commonJS({
   }
 });
 
-// drafts.js
+// home-plugin/drafts.js
 var require_drafts = __commonJS({
-  "drafts.js"(exports2, module2) {
+  "home-plugin/drafts.js"(exports2, module2) {
     var { contentHash } = require_activity();
     var DRAFT_DIR = "手记/草稿";
     function draftPath(id) {
@@ -1633,9 +1894,9 @@ var require_drafts = __commonJS({
   }
 });
 
-// archive.js
+// home-plugin/archive.js
 var require_archive = __commonJS({
-  "archive.js"(exports2, module2) {
+  "home-plugin/archive.js"(exports2, module2) {
     var { contentHash } = require_activity();
     function renderArchivePending({
       draftPath,
@@ -1705,9 +1966,9 @@ var require_archive = __commonJS({
   }
 });
 
-// archive-llm.js
+// home-plugin/archive-llm.js
 var require_archive_llm = __commonJS({
-  "archive-llm.js"(exports2, module2) {
+  "home-plugin/archive-llm.js"(exports2, module2) {
     var ARCHIVE_SYSTEM = `你是笔记归档助手。根据正文只建议标题和存放路径，不改写正文。
 只输出一个 JSON 对象，无 markdown 围栏：
 {"title":"简短标题","path":"相对路径.md"}
@@ -1862,9 +2123,9 @@ ${hints.join("\n")}` : "",
   }
 });
 
-// review-round.js
+// home-plugin/review-round.js
 var require_review_round = __commonJS({
-  "review-round.js"(exports2, module2) {
+  "home-plugin/review-round.js"(exports2, module2) {
     var ROUND_SIZE = 5;
     function freshRound(items, size = ROUND_SIZE, now = Date.now()) {
       const queue = (Array.isArray(items) ? items : []).slice(0, size);
@@ -1948,9 +2209,9 @@ var require_review_round = __commonJS({
   }
 });
 
-// projects.js
+// home-plugin/projects.js
 var require_projects = __commonJS({
-  "projects.js"(exports2, module2) {
+  "home-plugin/projects.js"(exports2, module2) {
     function extractNextStep(markdown) {
       const text = String(markdown || "").replace(/\r\n/g, "\n");
       const heading = text.match(/^#{1,4}[ \t]+下一步[ \t]*$/m);
@@ -2040,10 +2301,11 @@ ${line}
   }
 });
 
-// src/activity-ui.js
+// home-plugin/src/activity-ui.js
 var require_activity_ui = __commonJS({
-  "src/activity-ui.js"(exports2, module2) {
+  "home-plugin/src/activity-ui.js"(exports2, module2) {
     var { MarkdownRenderer, Notice: Notice2, TFile: TFile2, TFolder: TFolder2, setIcon: setIcon2 } = require("obsidian");
+    var { keepScroll } = require_editor_scroll();
     var {
       contentHash,
       continueItems,
@@ -2497,7 +2759,9 @@ ${state.body}`;
           }
         }
         state.saveError = "";
-        if (view.editorStatus) view.editorStatus.setText("已保存");
+        if (view.editorStatus) {
+          keepScroll(view.editorStatus, () => view.editorStatus.setText("已保存"));
+        }
         await view.plugin.appendActivity({
           id: `draft:${state.draftId || state.path}`,
           type: "draft",
@@ -2508,7 +2772,9 @@ ${state.body}`;
         });
       } catch (_) {
         state.saveError = "没保存上";
-        if (view.editorStatus) view.editorStatus.setText("没保存上，字还在这里");
+        if (view.editorStatus) {
+          keepScroll(view.editorStatus, () => view.editorStatus.setText("没保存上，字还在这里"));
+        }
         new Notice2("草稿没保存上，字还在编辑器里");
       }
     }
@@ -3335,7 +3601,7 @@ ${excerpt}`);
   }
 });
 
-// src/app.js
+// home-plugin/src/app.js
 var {
   Plugin,
   ItemView,
@@ -3349,6 +3615,7 @@ var {
   setIcon,
   requestUrl
 } = require("obsidian");
+var { watchEditorScroll } = require_editor_scroll();
 var {
   TIMEBOX_ABANDON_MIN_MS,
   TimeboxEngine,
@@ -4440,12 +4707,18 @@ var HomeView = class extends ItemView {
     const token = this._renderSeq += 1;
     const screen = this.current();
     const key = this.screenKey(screen);
-    const prevScroll = key === this._scrollKey ? this.contentEl.querySelector(".meinc-home-scroll")?.scrollTop || 0 : 0;
+    if (screen.type === "editor" && key === this._scrollKey && this.editorArea?.isConnected && this.editorArea.value === String(this.editorState?.body || "")) {
+      return;
+    }
     if (token !== this._renderSeq) return;
+    const keepFocus = screen.type === "editor" && this.editorArea?.isConnected && document.activeElement === this.editorArea;
+    const selection = keepFocus ? { start: this.editorArea.selectionStart, end: this.editorArea.selectionEnd } : null;
+    const prevScroll = key === this._scrollKey ? this.contentEl.querySelector(".meinc-home-scroll")?.scrollTop || 0 : 0;
     const host = this.contentEl;
     host.empty();
     host.addClass("meinc-home");
     const root = host.createDiv({ cls: "meinc-home-scroll" });
+    watchEditorScroll(root);
     if (screen.type === "home") this.renderHome(root);
     else if (screen.type === "inbox") this.renderInbox(root);
     else if (screen.type === "review") this.renderReview(root);
@@ -4459,6 +4732,13 @@ var HomeView = class extends ItemView {
     else this.renderFolder(root, screen);
     this._scrollKey = key;
     root.scrollTop = prevScroll;
+    if (keepFocus && this.editorArea) {
+      this.editorArea.focus({ preventScroll: true });
+      if (selection && Number.isFinite(selection.start)) {
+        this.editorArea.setSelectionRange(selection.start, selection.end);
+      }
+      this.editorArea._syncEditorScroll?.();
+    }
   }
   renderHome(root) {
     const { weekday, date } = formatHomeDate();

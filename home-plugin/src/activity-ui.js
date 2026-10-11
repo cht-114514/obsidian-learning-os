@@ -1,4 +1,5 @@
 const { MarkdownRenderer, Notice, TFile, TFolder, setIcon } = require("obsidian");
+const { keepScroll } = require("../editor-scroll.js");
 const {
   contentHash,
   continueItems,
@@ -475,7 +476,9 @@ async function flushEditor(view) {
       }
     }
     state.saveError = "";
-    if (view.editorStatus) view.editorStatus.setText("已保存");
+    if (view.editorStatus) {
+      keepScroll(view.editorStatus, () => view.editorStatus.setText("已保存"));
+    }
     await view.plugin.appendActivity({
       id: `draft:${state.draftId || state.path}`,
       type: "draft",
@@ -486,7 +489,9 @@ async function flushEditor(view) {
     });
   } catch (_) {
     state.saveError = "没保存上";
-    if (view.editorStatus) view.editorStatus.setText("没保存上，字还在这里");
+    if (view.editorStatus) {
+      keepScroll(view.editorStatus, () => view.editorStatus.setText("没保存上，字还在这里"));
+    }
     new Notice("草稿没保存上，字还在编辑器里");
   }
 }

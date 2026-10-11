@@ -12,6 +12,7 @@ const {
   requestUrl,
 } = require("obsidian");
 
+const { watchEditorScroll } = require("../editor-scroll.js");
 const {
   TIMEBOX_ABANDON_MIN_MS,
   TimeboxEngine,
@@ -1224,16 +1225,35 @@ class HomeView extends ItemView {
     const token = (this._renderSeq += 1);
     const screen = this.current();
     const key = this.screenKey(screen);
+    // Typing already updates the textarea in place. Rebuilding it (autosave,
+    // vault events) drops focus and makes iOS jump the scroll position.
+    if (
+      screen.type === "editor" &&
+      key === this._scrollKey &&
+      this.editorArea?.isConnected &&
+      this.editorArea.value === String(this.editorState?.body || "")
+    ) {
+      return;
+    }
+    if (token !== this._renderSeq) return;
+
+    const keepFocus =
+      screen.type === "editor" &&
+      this.editorArea?.isConnected &&
+      document.activeElement === this.editorArea;
+    const selection = keepFocus
+      ? { start: this.editorArea.selectionStart, end: this.editorArea.selectionEnd }
+      : null;
     const prevScroll =
       key === this._scrollKey
         ? this.contentEl.querySelector(".meinc-home-scroll")?.scrollTop || 0
         : 0;
-    if (token !== this._renderSeq) return;
 
     const host = this.contentEl;
     host.empty();
     host.addClass("meinc-home");
     const root = host.createDiv({ cls: "meinc-home-scroll" });
+    watchEditorScroll(root);
 
     if (screen.type === "home") this.renderHome(root);
     else if (screen.type === "inbox") this.renderInbox(root);
@@ -1249,6 +1269,13 @@ class HomeView extends ItemView {
 
     this._scrollKey = key;
     root.scrollTop = prevScroll;
+    if (keepFocus && this.editorArea) {
+      this.editorArea.focus({ preventScroll: true });
+      if (selection && Number.isFinite(selection.start)) {
+        this.editorArea.setSelectionRange(selection.start, selection.end);
+      }
+      this.editorArea._syncEditorScroll?.();
+    }
   }
 
   renderHome(root) {

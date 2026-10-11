@@ -58,6 +58,7 @@ body.is-translucent .meinc-home-view .view-content {
   align-items: center;
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
   touch-action: pan-y;
@@ -1586,6 +1587,15 @@ body.is-translucent .meinc-home {
   font: inherit;
   line-height: 1.7;
   resize: vertical;
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+
+@media (hover: none) {
+  .meinc-editor-area {
+    resize: none;
+  }
 }
 
 .meinc-reader-page {
