@@ -3,9 +3,9 @@ var __commonJS = (cb, mod) => function __require() {
   return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
 };
 
-// timebox.js
+// home-plugin/timebox.js
 var require_timebox = __commonJS({
-  "timebox.js"(exports2, module2) {
+  "home-plugin/timebox.js"(exports2, module2) {
     var TIMEBOX_PRESETS = [5, 10, 15, 25, 45];
     var TIMEBOX_RECENT_MAX = 5;
     var TIMEBOX_MIN_MS = 6e4;
@@ -797,9 +797,9 @@ var require_timebox = __commonJS({
   }
 });
 
-// compound.js
+// home-plugin/compound.js
 var require_compound = __commonJS({
-  "compound.js"(exports2, module2) {
+  "home-plugin/compound.js"(exports2, module2) {
     var COMPOUND_DIR2 = "资料库/复利";
     var COMPOUND_TITLE2 = "复利";
     var COMPOUND_FIELD_MAX2 = 2e3;
@@ -1048,9 +1048,9 @@ var require_compound = __commonJS({
   }
 });
 
-// review-queue.js
+// home-plugin/review-queue.js
 var require_review_queue = __commonJS({
-  "review-queue.js"(exports2, module2) {
+  "home-plugin/review-queue.js"(exports2, module2) {
     var REVIEW_LEDGER_PATH2 = "agent-inbox/meinc-home/review-ledger.json";
     var HONGLOU_PUSH_FOLDER2 = "基础学科/语文/红楼梦/每日推送";
     var LIBRARY_ROOT2 = "资料库";
@@ -1321,9 +1321,9 @@ var require_review_queue = __commonJS({
   }
 });
 
-// activity.js
+// home-plugin/activity.js
 var require_activity = __commonJS({
-  "activity.js"(exports2, module2) {
+  "home-plugin/activity.js"(exports2, module2) {
     var ACTIVITY_PREFIX = "activity-";
     function contentHash(text) {
       const s = String(text ?? "");
@@ -1513,9 +1513,9 @@ var require_activity = __commonJS({
   }
 });
 
-// drafts.js
+// home-plugin/drafts.js
 var require_drafts = __commonJS({
-  "drafts.js"(exports2, module2) {
+  "home-plugin/drafts.js"(exports2, module2) {
     var { contentHash } = require_activity();
     var DRAFT_DIR = "手记/草稿";
     function draftPath(id) {
@@ -1525,21 +1525,40 @@ var require_drafts = __commonJS({
       const suffix = String(deviceId || "other").replace(/[^\w-]/g, "").slice(0, 24) || "other";
       return `${DRAFT_DIR}/${id}.conflict-${suffix}.md`;
     }
-    function renderDraft({ id, body, baseHash, deviceId, kind, updatedAt }) {
+    function renderDraft({ id, body, baseHash, deviceId, kind, updatedAt, created }) {
       const hash = baseHash || contentHash(body);
-      return [
+      const lines = [
         "---",
         "type: meinc-draft",
         `draft_id: ${id}`,
         `base_hash: ${hash}`,
         `device_id: ${deviceId || ""}`,
-        `kind: ${kind || "writing"}`,
+        `kind: ${kind || "writing"}`
+      ];
+      if (created) lines.push(`created: ${created}`);
+      lines.push(
         `updated_at: ${updatedAt || (/* @__PURE__ */ new Date()).toISOString()}`,
         "---",
         "",
         String(body ?? ""),
         ""
-      ].join("\n");
+      );
+      return lines.join("\n");
+    }
+    function newWritingNote({ id, body, kind, created, deviceId } = {}) {
+      const when = created || (/* @__PURE__ */ new Date()).toISOString();
+      const noteId = String(id || "").trim();
+      return {
+        path: draftPath(noteId),
+        markdown: renderDraft({
+          id: noteId,
+          body: String(body ?? ""),
+          kind: kind || "writing",
+          deviceId,
+          created: when,
+          updatedAt: when
+        })
+      };
     }
     function parseDraft(markdown) {
       const text = String(markdown ?? "");
@@ -1625,6 +1644,7 @@ var require_drafts = __commonJS({
       DRAFT_DIR,
       conflictPath,
       draftPath,
+      newWritingNote,
       parseDraft,
       planDraftSave,
       planTextSave,
@@ -1633,238 +1653,9 @@ var require_drafts = __commonJS({
   }
 });
 
-// archive.js
-var require_archive = __commonJS({
-  "archive.js"(exports2, module2) {
-    var { contentHash } = require_activity();
-    function renderArchivePending({
-      draftPath,
-      draftId,
-      hash,
-      proposedTitle,
-      proposedPath,
-      created
-    }) {
-      return [
-        "---",
-        "status: pending",
-        "type: note-archive",
-        `title: ${proposedTitle || "归档草稿"}`,
-        `created: ${created || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}`,
-        `path: ${proposedPath || ""}`,
-        `source_paths: ${JSON.stringify([draftPath].filter(Boolean))}`,
-        `content_hash: ${hash || ""}`,
-        `draft_id: ${draftId || ""}`,
-        "---",
-        "",
-        "只建议标题和存放位置。确认前不要改写正文。",
-        ""
-      ].join("\n");
-    }
-    function parseArchivePending(markdown) {
-      const text = String(markdown ?? "");
-      const match = text.match(/^---\n([\s\S]*?)\n---/);
-      const meta = {};
-      if (match) {
-        for (const line of match[1].split("\n")) {
-          const pair = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
-          if (pair) meta[pair[1]] = pair[2].trim().replace(/^["']|["']$/g, "");
-        }
-      }
-      return {
-        status: meta.status || "pending",
-        type: meta.type || "",
-        title: meta.title || "",
-        path: meta.path || "",
-        hash: meta.content_hash || "",
-        draftId: meta.draft_id || ""
-      };
-    }
-    function decideArchive({ draftBody, confirmedHash, targetExists, targetBody }) {
-      const body = String(draftBody ?? "");
-      const hash = contentHash(body);
-      if (!confirmedHash || hash !== confirmedHash) return { action: "stale", hash };
-      if (targetExists && String(targetBody ?? "") === body) return { action: "noop", hash };
-      if (targetExists) return { action: "conflict", hash };
-      return { action: "write", hash, body };
-    }
-    function decideNextWrite({ line, confirmedLine, targetBody, confirmedTargetHash }) {
-      const text = String(line || "").trim();
-      if (!text || text !== String(confirmedLine || "").trim()) return { action: "stale" };
-      const currentHash = contentHash(String(targetBody ?? ""));
-      if (confirmedTargetHash && currentHash !== confirmedTargetHash) return { action: "stale" };
-      if (String(targetBody || "").includes(text)) return { action: "noop" };
-      return { action: "append", line: text, hash: currentHash };
-    }
-    module2.exports = {
-      decideArchive,
-      decideNextWrite,
-      parseArchivePending,
-      renderArchivePending
-    };
-  }
-});
-
-// archive-llm.js
-var require_archive_llm = __commonJS({
-  "archive-llm.js"(exports2, module2) {
-    var ARCHIVE_SYSTEM = `你是笔记归档助手。根据正文只建议标题和存放路径，不改写正文。
-只输出一个 JSON 对象，无 markdown 围栏：
-{"title":"简短标题","path":"相对路径.md"}
-
-路径必须：
-- 以 手记/、项目库/ 或 基础学科/ 开头
-- 以 .md 结尾
-- 不得使用 手记/草稿
-- 优先从用户给出的现有文件夹中选择合适位置`;
-    function archiveLlmConfigFromApp(app) {
-      const agent = app?.plugins?.plugins?.["obsidian-agent-os"];
-      const s = agent?.settings || {};
-      const baseUrl = String(s.memoryLlmBaseUrl || s.embedBaseUrl || "").trim().replace(/\/$/, "");
-      const apiKey = String(s.memoryLlmApiKey || s.embedApiKey || "").trim();
-      const model = String(s.memoryLlmModel || "qwen3.7-flash").trim();
-      return { baseUrl, apiKey, model };
-    }
-    function isAllowedArchivePath(path) {
-      const p = String(path || "");
-      if (!/^(手记|项目库|基础学科)\/.+\.md$/.test(p) || p.includes("..")) return false;
-      if (/^手记\/草稿(\/|$)/.test(p)) return false;
-      return true;
-    }
-    function sanitizeFileStem(title) {
-      const stem = String(title || "未命名").trim().replace(/[\\/:*?"<>|#\n\r]/g, "").slice(0, 80);
-      return stem || "未命名";
-    }
-    function fallbackArchivePath(title) {
-      return `手记/随记/${sanitizeFileStem(title)}.md`;
-    }
-    function normalizeArchiveSuggestion(parsed) {
-      const title = String(parsed?.title || "").trim() || "未命名";
-      let path = String(parsed?.path || "").trim();
-      if (!isAllowedArchivePath(path)) path = fallbackArchivePath(title);
-      return { title, path };
-    }
-    function parseArchiveSuggestionJson(text) {
-      const s = String(text || "").trim();
-      const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-      const body = fenced ? fenced[1].trim() : s;
-      const start = body.indexOf("{");
-      const end = body.lastIndexOf("}");
-      if (start < 0 || end <= start) throw new Error("archive: no JSON object");
-      return normalizeArchiveSuggestion(JSON.parse(body.slice(start, end + 1)));
-    }
-    function bumpArchivePath(path, index) {
-      const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-      const dot = path.lastIndexOf(".md");
-      if (dot < 0) return path;
-      const stem = path.slice(0, dot);
-      if (index <= 0) return `${stem}-${date}.md`;
-      return `${stem}-${date}-${index + 1}.md`;
-    }
-    function avoidPathCollision(path, draftBody, readBody) {
-      const existing = readBody(path);
-      if (existing == null) return path;
-      if (String(existing) === String(draftBody)) return path;
-      for (let i = 0; i < 24; i += 1) {
-        const candidate = bumpArchivePath(path, i);
-        const body = readBody(candidate);
-        if (body == null) return candidate;
-        if (String(body) === String(draftBody)) return candidate;
-      }
-      return bumpArchivePath(path, 23);
-    }
-    async function resolveArchivePath(path, draftBody, readBody) {
-      const existing = await readBody(path);
-      if (existing == null) return path;
-      if (String(existing) === String(draftBody)) return path;
-      for (let i = 0; i < 24; i += 1) {
-        const candidate = bumpArchivePath(path, i);
-        const body = await readBody(candidate);
-        if (body == null) return candidate;
-        if (String(body) === String(draftBody)) return candidate;
-      }
-      return bumpArchivePath(path, 23);
-    }
-    async function callArchiveLlm(opts) {
-      const base = String(opts.baseUrl || "").replace(/\/$/, "");
-      const apiKey = String(opts.apiKey || "").trim();
-      const model = String(opts.model || "").trim();
-      if (!base || !apiKey || !model) {
-        return { skipped: true, reason: "no-config" };
-      }
-      const fetchImpl = opts.fetchImpl || globalThis.fetch;
-      if (!fetchImpl) return { skipped: true, reason: "no-fetch" };
-      const hints = (opts.folderHints || []).slice(0, 80);
-      const userParts = [
-        hints.length ? `现有文件夹（优先选用）：
-${hints.join("\n")}` : "",
-        "正文：",
-        String(opts.body || "").slice(0, 12e3)
-      ].filter(Boolean);
-      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeoutMs = opts.timeoutMs ?? 2e4;
-      const timer = controller && setTimeout(() => {
-        try {
-          controller.abort();
-        } catch {
-        }
-      }, timeoutMs);
-      try {
-        const res = await fetchImpl(`${base}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model,
-            temperature: 0.1,
-            max_tokens: 400,
-            messages: [
-              { role: "system", content: ARCHIVE_SYSTEM },
-              { role: "user", content: userParts.join("\n\n") }
-            ]
-          }),
-          signal: opts.signal || controller?.signal
-        });
-        let body;
-        try {
-          body = await res.json();
-        } catch {
-          throw new Error(`archive HTTP ${res.status} non-JSON`);
-        }
-        if (!res.ok) {
-          const msg = body?.error?.message || body?.message || `HTTP ${res.status}`;
-          throw new Error(`archive: ${msg}`);
-        }
-        const content = body?.choices?.[0]?.message?.content || "";
-        const suggestion = parseArchiveSuggestionJson(content);
-        return { ok: true, suggestion };
-      } catch (e) {
-        return { ok: false, error: e?.message || String(e) };
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-    module2.exports = {
-      ARCHIVE_SYSTEM,
-      archiveLlmConfigFromApp,
-      avoidPathCollision,
-      bumpArchivePath,
-      callArchiveLlm,
-      fallbackArchivePath,
-      isAllowedArchivePath,
-      normalizeArchiveSuggestion,
-      parseArchiveSuggestionJson,
-      resolveArchivePath,
-      sanitizeFileStem
-    };
-  }
-});
-
-// review-round.js
+// home-plugin/review-round.js
 var require_review_round = __commonJS({
-  "review-round.js"(exports2, module2) {
+  "home-plugin/review-round.js"(exports2, module2) {
     var ROUND_SIZE = 5;
     function freshRound(items, size = ROUND_SIZE, now = Date.now()) {
       const queue = (Array.isArray(items) ? items : []).slice(0, size);
@@ -1948,9 +1739,9 @@ var require_review_round = __commonJS({
   }
 });
 
-// projects.js
+// home-plugin/projects.js
 var require_projects = __commonJS({
-  "projects.js"(exports2, module2) {
+  "home-plugin/projects.js"(exports2, module2) {
     function extractNextStep(markdown) {
       const text = String(markdown || "").replace(/\r\n/g, "\n");
       const heading = text.match(/^#{1,4}[ \t]+下一步[ \t]*$/m);
@@ -2040,9 +1831,9 @@ ${line}
   }
 });
 
-// src/activity-ui.js
+// home-plugin/src/activity-ui.js
 var require_activity_ui = __commonJS({
-  "src/activity-ui.js"(exports2, module2) {
+  "home-plugin/src/activity-ui.js"(exports2, module2) {
     var { MarkdownRenderer, Notice: Notice2, TFile: TFile2, TFolder: TFolder2, setIcon: setIcon2 } = require("obsidian");
     var {
       contentHash,
@@ -2054,13 +1845,7 @@ var require_activity_ui = __commonJS({
       recordsForDay,
       serializeActivityJsonl
     } = require_activity();
-    var { DRAFT_DIR, parseDraft, planDraftSave, planTextSave } = require_drafts();
-    var { decideArchive, renderArchivePending, parseArchivePending } = require_archive();
-    var {
-      archiveLlmConfigFromApp,
-      callArchiveLlm,
-      resolveArchivePath
-    } = require_archive_llm();
+    var { newWritingNote } = require_drafts();
     var { freshRound, gradeRound, prosePrompt, skipRound } = require_review_round();
     var {
       appendNextStep,
@@ -2085,11 +1870,6 @@ var require_activity_ui = __commonJS({
       listDueProseEntries: listDueProseEntries2
     } = require_review_queue();
     var ACTIVITY_DIR = "agent-inbox/meinc-home";
-    var OUTPUT_PROMPTS = [
-      { label: "解释", text: "用自己的话解释：" },
-      { label: "复述", text: "合上原文，复述：" },
-      { label: "推导", text: "写下推导：" }
-    ];
     function weeksAndDate(now = /* @__PURE__ */ new Date()) {
       const weeks = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
       return {
@@ -2103,32 +1883,14 @@ var require_activity_ui = __commonJS({
       if (!match) return { meta: "", body: text };
       return { meta: match[0], body: text.slice(match[0].length) };
     }
-    function allowedTarget(path) {
-      return /^(手记|项目库|基础学科)\/.+\.md$/.test(String(path || "")) && !path.includes("..");
-    }
-    function collectArchiveFolderHints(app) {
-      const roots = ["手记", "项目库", "基础学科"];
-      const skip = /* @__PURE__ */ new Set(["手记/草稿", "项目库/_模板"]);
-      const hints = [];
-      const walk = (folderPath, depth) => {
-        const folder = app.vault.getAbstractFileByPath(folderPath);
-        if (!(folder instanceof TFolder2) || depth > 2) return;
-        for (const child of folder.children) {
-          if (!(child instanceof TFolder2)) continue;
-          const path = `${folderPath}/${child.name}`;
-          if (skip.has(path) || path.includes(".trash") || child.name.startsWith(".")) continue;
-          hints.push(path);
-          if (depth < 2) walk(path, depth + 1);
-        }
-      };
-      for (const root of roots) walk(root, 1);
-      return hints;
-    }
     async function writeText(plugin, path, text) {
       await plugin.ensureFolders(path);
       const file = plugin.app.vault.getAbstractFileByPath(path);
-      if (file instanceof TFile2) await plugin.app.vault.modify(file, text);
-      else await plugin.app.vault.create(path, text);
+      if (file instanceof TFile2) {
+        await plugin.app.vault.modify(file, text);
+        return file;
+      }
+      return plugin.app.vault.create(path, text);
     }
     async function readText(plugin, path) {
       const file = plugin.app.vault.getAbstractFileByPath(path);
@@ -2217,7 +1979,7 @@ var require_activity_ui = __commonJS({
         view.push({ type: "reader", path: item.path, title: item.title });
         return;
       }
-      if (item.path) view.openDraft({ path: item.path, draftId: item.draftId, kind: "writing" });
+      if (item.path) void view.openDraft({ path: item.path, kind: item.event?.kind || "writing" });
     }
     function renderLibrary(view, root) {
       header(view, root, "阅读");
@@ -2385,241 +2147,6 @@ var require_activity_ui = __commonJS({
         view.plugin.pendingTimeboxSource = screen.path;
         view.plugin.openTimeboxStart({ title: view.readerState.title });
       };
-    }
-    function renderEditor(view, root) {
-      const state = view.editorState;
-      header(view, root, state?.title || "写作", () => {
-        void view.flushEditor().then(() => view.back());
-      });
-      if (!state) {
-        root.createDiv({ cls: "meinc-home-empty", text: "正在打开" });
-        return;
-      }
-      if (state.kind === "output") {
-        const prompts = root.createEl("details", { cls: "meinc-editor-prompts" });
-        prompts.createEl("summary", { text: "需要提示时再打开" });
-        for (const prompt of OUTPUT_PROMPTS) {
-          prompts.createEl("button", { text: prompt.label, attr: { type: "button" } }).onclick = () => {
-            if (!state.body.includes(prompt.text)) {
-              state.body = `${prompt.text}
-${state.body}`;
-              area.value = state.body;
-              scheduleEditorSave(view);
-            }
-          };
-        }
-      }
-      const area = root.createEl("textarea", {
-        cls: "meinc-editor-area",
-        attr: { placeholder: "直接写" }
-      });
-      area.value = state.body || "";
-      const note = root.createDiv({ cls: "meinc-editor-status", text: state.saveError || "" });
-      area.addEventListener("compositionstart", () => {
-        state.composing = true;
-      });
-      area.addEventListener("compositionend", () => {
-        state.composing = false;
-        state.body = area.value;
-        scheduleEditorSave(view);
-      });
-      area.addEventListener("input", () => {
-        state.body = area.value;
-        view.editorSelection = "";
-        if (!state.composing) scheduleEditorSave(view);
-      });
-      area.addEventListener("select", () => {
-        const start = area.selectionStart || 0;
-        const end = area.selectionEnd || 0;
-        view.editorSelection = area.value.slice(start, end);
-      });
-      const actions = root.createDiv({ cls: "meinc-home-empty-actions" });
-      actions.createEl("button", { text: "整理归档", attr: { type: "button" } }).onclick = () => {
-        void requestArchive(view, note);
-      };
-      actions.createEl("button", { text: "加入复习", attr: { type: "button" } }).onclick = () => {
-        void view.plugin.addOutputToReview(state.body);
-        new Notice2("已加入复习");
-      };
-      actions.createEl("button", { text: "开始计时", attr: { type: "button" } }).onclick = () => {
-        view.plugin.pendingTimeboxSource = state.path || "";
-        view.plugin.openTimeboxStart({ title: state.title || "写作" });
-      };
-      const card = root.createDiv({ cls: "meinc-archive-card" });
-      view.archiveCardEl = card;
-      if (state.pendingPath) void paintArchiveCard(view, card);
-      view.editorArea = area;
-      view.editorStatus = note;
-    }
-    function scheduleEditorSave(view) {
-      clearTimeout(view._draftTimer);
-      view._draftTimer = setTimeout(() => {
-        void view.flushEditor();
-      }, 600);
-    }
-    async function flushEditor(view) {
-      const state = view.editorState;
-      if (!state || state.composing) return;
-      try {
-        if (state.wrapped) {
-          const decision = planDraftSave({
-            id: state.draftId,
-            kind: state.kind,
-            deviceId: view.plugin.ensureTimeboxDeviceId(),
-            baseHash: state.baseHash,
-            localBody: state.body,
-            diskMarkdown: state.path ? await readText(view.plugin, state.path) : null
-          });
-          if (decision.action === "unchanged") return;
-          const path = decision.path || state.path;
-          await writeText(view.plugin, path, decision.markdown);
-          state.path = decision.action === "conflict" ? path : state.path || path;
-          state.baseHash = decision.hash;
-          if (decision.action === "conflict") {
-            new Notice2("另一端也改过这篇，两份都留着");
-          }
-        } else {
-          const disk = await readText(view.plugin, state.path);
-          const decision = planTextSave({
-            baseHash: state.baseHash,
-            localBody: state.body,
-            diskBody: disk,
-            deviceId: view.plugin.ensureTimeboxDeviceId(),
-            conflictTarget: `${state.path}.conflict-${view.plugin.ensureTimeboxDeviceId()}.md`
-          });
-          if (decision.action === "unchanged") return;
-          if (decision.action === "conflict") {
-            await writeText(view.plugin, decision.path, state.body);
-            new Notice2("另一端也改过这篇，两份都留着");
-          } else {
-            await writeText(view.plugin, state.path, state.body);
-            state.baseHash = decision.hash;
-          }
-        }
-        state.saveError = "";
-        if (view.editorStatus) view.editorStatus.setText("已保存");
-        await view.plugin.appendActivity({
-          id: `draft:${state.draftId || state.path}`,
-          type: "draft",
-          draftId: state.draftId || "",
-          path: state.path,
-          title: state.title || "草稿",
-          kind: state.kind
-        });
-      } catch (_) {
-        state.saveError = "没保存上";
-        if (view.editorStatus) view.editorStatus.setText("没保存上，字还在这里");
-        new Notice2("草稿没保存上，字还在编辑器里");
-      }
-    }
-    async function requestArchive(view, note) {
-      const state = view.editorState;
-      if (!state) return;
-      await view.flushEditor();
-      const body = String(state.body || "").trim();
-      if (!body) {
-        note.setText("先写点什么再归档");
-        new Notice2("正文是空的");
-        return;
-      }
-      const hash = contentHash(state.body || "");
-      note.setText("正在看这篇…");
-      if (view.archiveCardEl) {
-        view.archiveCardEl.empty();
-        view.archiveCardEl.createDiv({ text: "正在看这篇…" });
-      }
-      const cfg = archiveLlmConfigFromApp(view.plugin.app);
-      if (!cfg.baseUrl || !cfg.apiKey) {
-        note.setText("记忆模型还没配好");
-        new Notice2("记忆模型还没配好");
-        if (view.archiveCardEl) {
-          view.archiveCardEl.empty();
-          view.archiveCardEl.createDiv({ text: "在 Agent OS 设置里配好 Embed 或记忆模型 API" });
-        }
-        return;
-      }
-      const folderHints = collectArchiveFolderHints(view.plugin.app);
-      const result = await callArchiveLlm({
-        baseUrl: cfg.baseUrl,
-        apiKey: cfg.apiKey,
-        model: cfg.model,
-        body: state.body,
-        folderHints
-      });
-      if (result.skipped || !result.ok) {
-        const msg = result.skipped ? "记忆模型还没配好" : "没能出归档建议";
-        note.setText(msg);
-        new Notice2(result.error ? `${msg}：${result.error}` : msg);
-        if (view.archiveCardEl) {
-          view.archiveCardEl.empty();
-          view.archiveCardEl.createDiv({ text: result.error || msg });
-        }
-        state.pendingPath = "";
-        return;
-      }
-      const { title } = result.suggestion;
-      let path = result.suggestion.path;
-      path = await resolveArchivePath(path, state.body, (p) => readText(view.plugin, p));
-      const pendingPath = `agent-inbox/pending/${dayKeyFromTime(Date.now())}-note-archive-${state.draftId || "note"}.md`;
-      await writeText(
-        view.plugin,
-        pendingPath,
-        renderArchivePending({
-          draftPath: state.path,
-          draftId: state.draftId,
-          hash,
-          proposedTitle: title,
-          proposedPath: path
-        })
-      );
-      state.pendingPath = pendingPath;
-      state.pendingHash = hash;
-      note.setText("看一下标题和位置，确认后归档");
-      if (view.archiveCardEl) await paintArchiveCard(view, view.archiveCardEl);
-    }
-    async function paintArchiveCard(view, card) {
-      const state = view.editorState;
-      card.empty();
-      if (!state?.pendingPath) return;
-      const pending = parseArchivePending(await readText(view.plugin, state.pendingPath) || "");
-      card.createDiv({ text: pending.title && pending.path ? `${pending.title} → ${pending.path}` : "还在等归档建议" });
-      const button = card.createEl("button", { text: "确认归档", attr: { type: "button" } });
-      button.disabled = !pending.path;
-      button.onclick = () => void applyArchive(view, pending);
-    }
-    async function applyArchive(view, pending) {
-      const state = view.editorState;
-      const target = pending.path;
-      if (!allowedTarget(target)) {
-        new Notice2("位置需要落在手记、项目库或基础学科");
-        return;
-      }
-      const disk = state.path ? await readText(view.plugin, state.path) : state.body;
-      const parsed = state.wrapped ? parseDraft(disk || "") : { body: disk || state.body };
-      const existing = await readText(view.plugin, target);
-      const decision = decideArchive({
-        draftBody: parsed.body,
-        confirmedHash: pending.hash,
-        targetExists: existing != null,
-        targetBody: existing
-      });
-      if (decision.action === "stale") {
-        new Notice2("正文已经变了，需要重新看一遍建议");
-        return;
-      }
-      if (decision.action === "conflict") {
-        new Notice2("那个位置已经有不同的内容，没有覆盖");
-        return;
-      }
-      if (decision.action === "write") await writeText(view.plugin, target, decision.body);
-      await view.plugin.appendActivity({
-        id: `draft:${state.draftId || state.path}`,
-        type: "draft",
-        draftId: state.draftId || "",
-        path: state.path,
-        done: true
-      });
-      new Notice2(decision.action === "noop" ? "已经在那里了" : "已归档");
     }
     function renderWriting(view, root) {
       header(view, root, "写作");
@@ -3091,16 +2618,6 @@ ${excerpt}`);
     }
     function agentContext(view) {
       const screen = view.current();
-      if (screen.type === "editor" && view.editorState) {
-        const body = String(view.editorState.body || "");
-        return {
-          path: view.editorState.path || "",
-          title: view.editorState.title || "草稿",
-          body,
-          selection: view.editorSelection || "",
-          version: contentHash(body)
-        };
-      }
       if (screen.type === "reader" && view.readerState) {
         const body = String(view.readerState.markdown || "");
         return {
@@ -3182,22 +2699,6 @@ ${excerpt}`);
           console.error(err);
           this.activityEvents = [];
         }
-        this.registerDomEvent(document, "visibilitychange", () => {
-          if (document.visibilityState === "hidden") void this.flushOpenEditors();
-        });
-        this.registerDomEvent(window, "pagehide", () => {
-          void this.flushOpenEditors();
-        });
-        this.registerEvent(
-          this.app.workspace.on("active-leaf-change", () => {
-            void this.flushOpenEditors();
-          })
-        );
-      };
-      plugin.flushOpenEditors = async function flushOpenEditors() {
-        for (const leaf of this.app.workspace.getLeavesOfType("meinc-home")) {
-          if (leaf.view?.flushEditor) await leaf.view.flushEditor();
-        }
       };
       const view = HomeView2.prototype;
       view.renderActivityHome = function renderHome(root) {
@@ -3211,9 +2712,6 @@ ${excerpt}`);
       };
       view.renderReader = function renderReaderScreen(root) {
         renderReader(this, root);
-      };
-      view.renderEditor = function renderEditorScreen(root) {
-        renderEditor(this, root);
       };
       view.renderWritingList = function renderWritingScreen(root) {
         renderWriting(this, root);
@@ -3240,54 +2738,39 @@ ${excerpt}`);
       };
       view.openDraft = async function openDraft(opts = {}) {
         const kind = opts.kind || "writing";
-        if (opts.resume && !opts.path) {
+        let path = opts.path || "";
+        if (opts.resume && !path) {
           const latest = (this.plugin.activityEvents || []).filter((event) => event.type === "draft" && !event.done && event.kind === "output").pop();
-          if (latest?.path) opts.path = latest.path;
+          if (latest?.path) path = latest.path;
         }
-        if (opts.path && opts.existing) {
-          const text = await readText(this.plugin, opts.path) || "";
-          this.editorState = {
-            path: opts.path,
-            title: opts.path.split("/").pop().replace(/\.md$/, ""),
-            body: text,
-            baseHash: contentHash(text),
-            kind,
-            wrapped: false,
-            draftId: opts.path
-          };
-        } else if (opts.path) {
-          const raw = await readText(this.plugin, opts.path) || "";
-          const parsed = parseDraft(raw);
-          this.editorState = {
-            path: opts.path,
-            draftId: parsed.id || opts.draftId || opts.path,
-            title: "草稿",
-            body: parsed.wrapped ? parsed.body : raw,
-            baseHash: parsed.baseHash || contentHash(parsed.wrapped ? parsed.body : raw),
-            kind: parsed.kind || kind,
-            wrapped: parsed.wrapped,
-            seed: opts.seed || ""
-          };
-          if (opts.seed && !this.editorState.body.includes(opts.seed.trim())) {
-            this.editorState.body = `${opts.seed}${this.editorState.body}`;
+        if (path) {
+          const existing = this.app.vault.getAbstractFileByPath(path);
+          if (existing instanceof TFile2) {
+            await this.plugin.openFile(existing);
+            return;
           }
-        } else {
-          const id = `d${Date.now().toString(36)}`;
-          this.editorState = {
-            path: `${DRAFT_DIR}/${id}.md`,
-            draftId: id,
-            title: kind === "output" ? "输出" : "草稿",
-            body: opts.seed || "",
-            baseHash: "",
-            kind,
-            wrapped: true
-          };
+          new Notice2("没有找到这篇");
+          return;
         }
-        this.editorSelection = "";
-        this.push({ type: "editor", title: this.editorState.title, path: this.editorState.path });
-      };
-      view.flushEditor = function flush() {
-        return flushEditor(this);
+        const id = `d${Date.now().toString(36)}`;
+        const created = (/* @__PURE__ */ new Date()).toISOString();
+        const note = newWritingNote({
+          id,
+          body: opts.seed || "",
+          kind,
+          created,
+          deviceId: this.plugin.ensureTimeboxDeviceId()
+        });
+        const file = await writeText(this.plugin, note.path, note.markdown);
+        await this.plugin.appendActivity({
+          id: `draft:${id}`,
+          type: "draft",
+          draftId: id,
+          path: note.path,
+          title: kind === "output" ? "输出" : "草稿",
+          kind
+        });
+        if (file instanceof TFile2) await this.plugin.openFile(file);
       };
       view.startStudyRound = function start(opts) {
         return startStudyRound(this, opts);
@@ -3313,29 +2796,15 @@ ${excerpt}`);
         return this.startStudyRound();
       };
       view.refreshListing = function refreshListing() {
-        const type = this.current().type;
-        if (type === "editor" || type === "reader") return;
+        if (this.current().type === "reader") return;
         this.render();
-      };
-      const origBack = view.back;
-      view.back = function back() {
-        if (this.current().type === "editor") {
-          void this.flushEditor().then(() => origBack.call(this));
-          return;
-        }
-        return origBack.call(this);
-      };
-      const origClose = view.onClose;
-      view.onClose = async function onClose() {
-        if (this.flushEditor) await this.flushEditor();
-        return origClose.call(this);
       };
     }
     module2.exports = { install };
   }
 });
 
-// src/app.js
+// home-plugin/src/app.js
 var {
   Plugin,
   ItemView,
@@ -4432,7 +3901,6 @@ var HomeView = class extends ItemView {
     if (screen.type === "review") {
       return `review:${screen.mode || "hub"}`;
     }
-    if (screen.type === "editor") return `editor:${screen.path || ""}`;
     if (screen.type === "reader") return `reader:${screen.path || ""}`;
     return `${screen.type}:${screen.path || screen.folder || ""}`;
   }
@@ -4450,7 +3918,6 @@ var HomeView = class extends ItemView {
     else if (screen.type === "inbox") this.renderInbox(root);
     else if (screen.type === "review") this.renderReview(root);
     else if (screen.type === "compound") this.renderCompound(root);
-    else if (screen.type === "editor") this.renderEditor(root);
     else if (screen.type === "reader") this.renderReader(root);
     else if (screen.type === "library") this.renderLibrary(root);
     else if (screen.type === "writing-list") this.renderWritingList(root);

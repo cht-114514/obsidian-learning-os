@@ -1215,7 +1215,6 @@ class HomeView extends ItemView {
     if (screen.type === "review") {
       return `review:${screen.mode || "hub"}`;
     }
-    if (screen.type === "editor") return `editor:${screen.path || ""}`;
     if (screen.type === "reader") return `reader:${screen.path || ""}`;
     return `${screen.type}:${screen.path || screen.folder || ""}`;
   }
@@ -1239,7 +1238,6 @@ class HomeView extends ItemView {
     else if (screen.type === "inbox") this.renderInbox(root);
     else if (screen.type === "review") this.renderReview(root);
     else if (screen.type === "compound") this.renderCompound(root);
-    else if (screen.type === "editor") this.renderEditor(root);
     else if (screen.type === "reader") this.renderReader(root);
     else if (screen.type === "library") this.renderLibrary(root);
     else if (screen.type === "writing-list") this.renderWritingList(root);

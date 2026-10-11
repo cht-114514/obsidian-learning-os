@@ -11,21 +11,41 @@ function conflictPath(id, deviceId) {
   return `${DRAFT_DIR}/${id}.conflict-${suffix}.md`;
 }
 
-function renderDraft({ id, body, baseHash, deviceId, kind, updatedAt }) {
+function renderDraft({ id, body, baseHash, deviceId, kind, updatedAt, created }) {
   const hash = baseHash || contentHash(body);
-  return [
+  const lines = [
     "---",
     "type: meinc-draft",
     `draft_id: ${id}`,
     `base_hash: ${hash}`,
     `device_id: ${deviceId || ""}`,
     `kind: ${kind || "writing"}`,
+  ];
+  if (created) lines.push(`created: ${created}`);
+  lines.push(
     `updated_at: ${updatedAt || new Date().toISOString()}`,
     "---",
     "",
     String(body ?? ""),
-    "",
-  ].join("\n");
+    ""
+  );
+  return lines.join("\n");
+}
+
+function newWritingNote({ id, body, kind, created, deviceId } = {}) {
+  const when = created || new Date().toISOString();
+  const noteId = String(id || "").trim();
+  return {
+    path: draftPath(noteId),
+    markdown: renderDraft({
+      id: noteId,
+      body: String(body ?? ""),
+      kind: kind || "writing",
+      deviceId,
+      created: when,
+      updatedAt: when,
+    }),
+  };
 }
 
 function parseDraft(markdown) {
@@ -115,6 +135,7 @@ module.exports = {
   DRAFT_DIR,
   conflictPath,
   draftPath,
+  newWritingNote,
   parseDraft,
   planDraftSave,
   planTextSave,
