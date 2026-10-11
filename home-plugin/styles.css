@@ -77,6 +77,35 @@ body.is-mobile .meinc-home-scroll > * {
   max-width: 430px;
 }
 
+/* Writing screen: the page pane must not scroll. iOS caret reveal would
+   otherwise move this pane — bottom edge on insert, vertical center on delete. */
+.meinc-home-scroll.is-writing {
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+  touch-action: manipulation;
+  padding-top: 12px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+.meinc-home-scroll.is-writing > .meinc-editor-area {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 0;
+  height: 160px;
+  margin-top: 8px;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.meinc-home-scroll.is-writing .meinc-editor-status {
+  min-height: 1.2em;
+}
+
 .theme-dark .meinc-home {
   --home-emphasis: var(--hv-color-emphasis, #e2a336);
   --home-blue: color-mix(in srgb, var(--home-accent) 50%, #60a5fa);

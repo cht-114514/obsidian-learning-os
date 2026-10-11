@@ -2,110 +2,125 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
-  caretClientFromMirror,
-  reconcileEditorScroll,
-  visibleBand,
+  iosCaretRevealScroll,
+  planPageScroll,
+  planWritingScroll,
+  writingFrameBox,
 } = require("./editor-scroll.js");
 
-// iOS jumped the pane upward while the caret was already on screen.
-assert.equal(
-  reconcileEditorScroll({
-    pinned: 120,
-    scrolled: 40,
-    maxScroll: 800,
-    caretTop: 300,
-    caretBottom: 324,
-    viewTop: 100,
-    viewBottom: 700,
-  }),
-  120
-);
+const line = { caretOffset: 300, lineHeight: 24, clientHeight: 400, maxScroll: 2000, margin: 8 };
+const insertNative = iosCaretRevealScroll({ inputType: "insertText", ...line });
+const deleteNative = iosCaretRevealScroll({ inputType: "deleteContentBackward", ...line });
 
-// Caret is below the visible band (keyboard). Scroll only enough to reveal it.
+// WebKit's two reveal targets are different: bottom edge vs vertical center.
+assert.equal(insertNative, 300 + 24 - 400);
+assert.equal(deleteNative, 300 + 24 / 2 - 400 / 2);
+assert.notEqual(insertNative, deleteNative);
+
+// The line is already inside the editor. Neither insert nor delete may move it,
+// even if WebKit has already scrolled to its native target.
+for (const inputType of ["insertText", "insertLineBreak", "deleteContentBackward", "deleteContentForward"]) {
+  const native = iosCaretRevealScroll({ inputType, ...line });
+  assert.equal(
+    planWritingScroll({ inputType, pinned: 200, scrolled: native, ...line }),
+    200
+  );
+  assert.notEqual(200, native);
+  assert.equal(planPageScroll({ inputType, pinned: 0 }), 0);
+  assert.equal(planPageScroll({ inputType, pinned: 16 }), 16);
+}
+
+// Insert of a line that is actually below the box nudges just enough, not to
+// the bare bottom edge WebKit would use.
 assert.equal(
-  reconcileEditorScroll({
+  planWritingScroll({
+    inputType: "insertText",
     pinned: 0,
-    scrolled: 0,
-    maxScroll: 800,
-    caretTop: 680,
-    caretBottom: 710,
-    viewTop: 80,
-    viewBottom: 600,
-    margin: 12,
+    scrolled: 124,
+    caretOffset: 500,
+    lineHeight: 24,
+    clientHeight: 400,
+    maxScroll: 2000,
+    margin: 8,
   }),
-  122
+  132
+);
+assert.equal(
+  iosCaretRevealScroll({ inputType: "insertText", caretOffset: 500, lineHeight: 24, clientHeight: 400 }),
+  124
 );
 
-// Browser overscrolled. Stay as close as possible to the pre-input position.
+// Delete when the line is above the box brings it to the top, not the center.
+const deleteAboveNative = iosCaretRevealScroll({
+  inputType: "deleteContentBackward",
+  caretOffset: 100,
+  lineHeight: 24,
+  clientHeight: 400,
+});
 assert.equal(
-  reconcileEditorScroll({
-    pinned: 0,
-    scrolled: 200,
-    maxScroll: 800,
-    caretTop: 400,
-    caretBottom: 430,
-    viewTop: 80,
-    viewBottom: 600,
-    margin: 12,
+  planWritingScroll({
+    inputType: "deleteContentBackward",
+    pinned: 400,
+    scrolled: deleteAboveNative,
+    caretOffset: 100,
+    lineHeight: 24,
+    clientHeight: 400,
+    maxScroll: 2000,
+    margin: 8,
   }),
-  42
+  92
 );
+assert.notEqual(92, deleteAboveNative);
 
-// No caret measurement: undo the jump instead of following it.
+// No caret measurement: put the scroll back. Do not keep a bottom or center jump.
 assert.equal(
-  reconcileEditorScroll({
+  planWritingScroll({ inputType: "insertText", pinned: 80, scrolled: insertNative, maxScroll: 500 }),
+  80
+);
+assert.equal(
+  planWritingScroll({
+    inputType: "deleteContentBackward",
     pinned: 80,
-    scrolled: 10,
+    scrolled: deleteNative,
     maxScroll: 500,
   }),
   80
 );
 
-assert.equal(
-  reconcileEditorScroll({
-    pinned: 900,
-    scrolled: 900,
-    maxScroll: 800,
-  }),
-  800
-);
-
-assert.deepEqual(
-  caretClientFromMirror({
-    areaTop: 100,
-    areaScrollTop: 40,
-    mirrorTop: 0,
-    markTop: 180,
-    markHeight: 24,
-  }),
-  { top: 240, bottom: 264 }
-);
-
-// Keyboard covers the bottom of the scroll pane. The visible band stops there.
-assert.deepEqual(
-  visibleBand({
-    boxTop: 40,
-    boxBottom: 800,
-    viewportOffset: 0,
-    viewportHeight: 520,
-  }),
-  { top: 40, bottom: 520 }
-);
+// Keyboard may cover the pane. Clip to the visual height and ignore any
+// viewport offset, so a caret reveal cannot shift the frame.
+assert.deepEqual(writingFrameBox({ parentHeight: 844, viewportHeight: 500 }), {
+  height: 500,
+  unchanged: false,
+});
+assert.deepEqual(writingFrameBox({ parentHeight: 480, viewportHeight: 500 }), {
+  height: null,
+  unchanged: true,
+});
 
 const dir = __dirname;
 const app = fs.readFileSync(path.join(dir, "src/app.js"), "utf8");
 const activity = fs.readFileSync(path.join(dir, "src/activity-ui.js"), "utf8");
 const css = fs.readFileSync(path.join(dir, "styles.css"), "utf8");
 const bundle = fs.readFileSync(path.join(dir, "main.js"), "utf8");
+const editorFn = activity.slice(
+  activity.indexOf("function renderEditor"),
+  activity.indexOf("function scheduleEditorSave")
+);
 
+assert(editorFn.includes('cls: "meinc-editor-area"'));
+assert(editorFn.includes('createEl("textarea"'));
+assert(!editorFn.includes("scrollIntoView"));
+assert(!editorFn.includes("CodeMirror"));
+assert(!editorFn.includes("contenteditable"));
+assert(app.includes("meinc-home-scroll is-writing"));
 assert(app.includes("watchEditorScroll(root)"));
-assert(app.includes("this.editorArea?.isConnected"));
-assert(app.includes("preventScroll: true"));
-assert(!/addEventListener\("input"[\s\S]{0,180}this\.render\(\)/.test(activity));
-assert(activity.includes("keepScroll(view.editorStatus"));
-assert(css.includes("overflow-anchor: none"));
-assert(!css.includes("field-sizing"));
-assert(bundle.includes("reconcileEditorScroll"));
+assert(css.includes(".meinc-home-scroll.is-writing"));
+assert(css.includes("overflow: hidden"));
+assert(!/scrollIntoView\(\s*\{[^}]*center/.test(activity));
+assert(!/scrollIntoView\(\s*\{[^}]*end/.test(activity));
+assert(bundle.includes("planWritingScroll"));
+assert(bundle.includes("iosCaretRevealScroll"));
 assert(!bundle.includes('require("../editor-scroll.js")'));
 
 console.log("editor scroll checks passed");

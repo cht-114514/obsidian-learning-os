@@ -1252,8 +1252,9 @@ class HomeView extends ItemView {
     const host = this.contentEl;
     host.empty();
     host.addClass("meinc-home");
-    const root = host.createDiv({ cls: "meinc-home-scroll" });
-    watchEditorScroll(root);
+    const root = host.createDiv({
+      cls: screen.type === "editor" ? "meinc-home-scroll is-writing" : "meinc-home-scroll",
+    });
 
     if (screen.type === "home") this.renderHome(root);
     else if (screen.type === "inbox") this.renderInbox(root);
@@ -1267,6 +1268,7 @@ class HomeView extends ItemView {
     else if (screen.type === "timebox-history") this.renderTimeboxHistory(root);
     else this.renderFolder(root, screen);
 
+    watchEditorScroll(root);
     this._scrollKey = key;
     root.scrollTop = prevScroll;
     if (keepFocus && this.editorArea) {
