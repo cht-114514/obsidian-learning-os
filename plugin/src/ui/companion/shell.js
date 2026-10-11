@@ -18,7 +18,7 @@ import {
   saveCapsulePos,
   shouldThawQuote,
 } from './layout.js';
-import { bindViewportListeners, navbarReservePx, planViewportBox } from '../mobile-insets.js';
+import { bindViewportListeners, navbarReservePx, planViewportBox, stepKeyboardInset } from '../mobile-insets.js';
 import { macLinkLabel } from '../delivery.js';
 import { loadSessionFromPath, SESSION_PATH } from '../../chat-history.js';
 
@@ -52,7 +52,10 @@ export function createCompanionController(app, plugin, deps) {
   let contextEl = null;
   let titleEl = null;
   let macEl = null;
-  let keyboardSettle = false;
+  let kbState = { offset: 0, openSince: 0 };
+  let pointerWithin = false;
+  let frameCache = null;
+  let openTimer = 0;
   let quoteWrap = null;
   let quoteTextEl = null;
   let excerptEl = null;
@@ -228,6 +231,7 @@ export function createCompanionController(app, plugin, deps) {
   }
 
   function currentFrame() {
+    if (frameCache) return frameCache;
     const override = typeof deps.previewViewport === 'function' ? deps.previewViewport() : deps.previewViewport;
     let navStack = 0;
     if (mobile && !override) {
@@ -237,19 +241,46 @@ export function createCompanionController(app, plugin, deps) {
       }
       if (!navStack) navStack = 88;
     }
-    const focused = !!composerHost?.querySelector('textarea')?.matches?.(':focus');
-    if (focused) keyboardSettle = false;
-    return planViewportBox({
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const focusWithin = !!(composerHost && active && composerHost.contains(active));
+    const focused = !!(focusWithin && active.matches?.('textarea, input'));
+    const box = {
       innerWidth: window.innerWidth,
       innerHeight: window.innerHeight,
       viewport: override || window.visualViewport,
       safeTop: safePx('--safe-area-inset-top'),
       safeBottom: safePx('--safe-area-inset-bottom'),
-      focused,
-      forceClosed: keyboardSettle && !focused,
+      focused: focused || focusWithin,
       navStack,
       margin: 12,
+    };
+    const raw = planViewportBox(box);
+    const next = stepKeyboardInset(kbState, {
+      now: Date.now(),
+      overlap: raw.keyboardPx,
+      focused,
+      focusWithin,
+      pointerWithin,
+      viewportClosed: !raw.keyboardOpen,
     });
+    kbState = { offset: next.offset, openSince: next.openSince };
+    if (next.retryIn > 0) {
+      if (!openTimer) {
+        openTimer = setTimeout(() => {
+          openTimer = 0;
+          place();
+        }, next.retryIn);
+      }
+    } else if (openTimer) {
+      clearTimeout(openTimer);
+      openTimer = 0;
+    }
+    const frame = next.offset > 0 || !raw.keyboardOpen ? raw : planViewportBox({ ...box, forceClosed: true });
+    frameCache = frame;
+    queueMicrotask(() => {
+      frameCache = null;
+    });
+    return frame;
   }
 
   function lockBackground() {
@@ -558,7 +589,6 @@ export function createCompanionController(app, plugin, deps) {
       onSend: (text) => submit(text),
       onAbort: () => ctrl().abort(),
       onFocus: () => {
-        keyboardSettle = false;
         freezeQuote();
         if (mode !== 'expanded') setMode('expanded');
         place();
@@ -578,14 +608,26 @@ export function createCompanionController(app, plugin, deps) {
       },
       true
     );
-    composerHost.addEventListener('focusout', () => {
-      place();
-      setTimeout(() => {
-        if (composerHost?.querySelector('textarea')?.matches?.(':focus')) return;
-        keyboardSettle = true;
-        place();
-      }, 600);
+    const schedulePlace = (fn) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+      else setTimeout(fn, 16);
+    };
+    composerHost.addEventListener('focusin', () => place());
+    composerHost.addEventListener('focusout', (event) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && composerHost.contains(next)) return;
+      schedulePlace(() => place());
     });
+    composerHost.addEventListener('pointerdown', () => {
+      pointerWithin = true;
+    }, true);
+    const releasePointer = () => {
+      if (!pointerWithin) return;
+      pointerWithin = false;
+      schedulePlace(() => place());
+    };
+    composerHost.addEventListener('pointerup', releasePointer, true);
+    composerHost.addEventListener('pointercancel', releasePointer, true);
 
     capsule.addEventListener('click', () => {
       if (capsule.dataset.suppressClick === '1') {
@@ -783,6 +825,8 @@ export function createCompanionController(app, plugin, deps) {
     detachView?.();
     unbindViewport?.();
     unbindViewport = null;
+    clearTimeout(openTimer);
+    openTimer = 0;
     document.removeEventListener('keydown', onKeydown);
     document.removeEventListener('pointerdown', onDocPointerDown, true);
     unlockBackground();

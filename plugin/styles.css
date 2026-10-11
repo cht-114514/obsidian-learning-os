@@ -4966,8 +4966,13 @@ body.is-phone .aos-composer-host.is-portal button.aos-send:not(.is-stop) {
 }
 .aos-root.is-mobile {
   /* One pad: keyboard overlap while the keys are up, home indicator when they are not.
-     The composer stays the last flex child — it is not position:fixed. */
+     The composer stays the last flex child — it is not position:fixed.
+     Only the collapse animates. Opening tracks the viewport with no transition,
+     so the box does not lag behind the keys. */
   padding-bottom: calc(var(--aos-kb, 0px) + var(--aos-safe-pad, max(8px, env(safe-area-inset-bottom, 0px))));
+}
+.aos-root.is-mobile.is-kb-collapse {
+  transition: padding-bottom 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .aos-root.is-mobile.is-keyboard {
   --aos-safe-pad: 8px;
@@ -4997,7 +5002,7 @@ body.is-phone .aos-composer-host.is-portal button.aos-send:not(.is-stop) {
 body.aos-hide-navbar.is-phone .mobile-navbar { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .aos-group, .aos-live-dot, .aos-sidebar { animation: none; transition: none; }
+  .aos-group, .aos-live-dot, .aos-sidebar, .aos-root.is-mobile.is-kb-collapse { animation: none; transition: none; }
 }
 
 /* ---------------------------------------------------------------------------

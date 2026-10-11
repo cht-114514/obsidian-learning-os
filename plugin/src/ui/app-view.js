@@ -11,7 +11,7 @@ import { mountSidebar, sessionKey } from './sidebar.js';
 import { mountChatPane } from './chat-pane.js';
 import { mountComposer } from './composer.js';
 import { placeholderFor, renderConnection } from './connection-view.js';
-import { bindViewportListeners, navbarReservePx, readShellKeyboard, resolveMobileKeyboardPx } from './mobile-insets.js';
+import { bindViewportListeners, navbarReservePx, readShellKeyboard, resolveMobileKeyboardPx, stepKeyboardInset } from './mobile-insets.js';
 import { macLinkLabel } from './delivery.js';
 import { phaseLabel } from './turn-phase.js';
 import { AOS_BUILD } from './build-id.js';
@@ -366,11 +366,20 @@ export function mountAgentApp(container, deps) {
     }
   }
 
-  let forceKeyboardClosed = false;
-  let settleTimer = 0;
+  let kbState = { offset: 0, openSince: 0 };
+  let pointerWithin = false;
+  let kbFrame = 0;
+  let openTimer = 0;
+  let disposed = false;
 
   function composerFocused() {
-    return !!composerHost.querySelector('textarea')?.matches?.(':focus');
+    const active = document.activeElement;
+    return !!(active && composerHost.contains(active) && active.matches?.('textarea, input'));
+  }
+
+  function focusWithinComposer() {
+    const active = document.activeElement;
+    return !!(active && composerHost.contains(active));
   }
 
   function safeBottomPx() {
@@ -384,46 +393,72 @@ export function mountAgentApp(container, deps) {
   }
 
   function applyKeyboardInset() {
-    if (!mobile) return;
+    if (!mobile || disposed) return;
     const focused = composerFocused();
-    if (focused) forceKeyboardClosed = false;
+    const focusWithin = focusWithinComposer();
     const rect = root.getBoundingClientRect();
     let cssKeyboard = 0;
-    if (!window.visualViewport && focused) {
+    if (!window.visualViewport && (focused || focusWithin)) {
       cssKeyboard = resolveMobileKeyboardPx(getComputedStyle(document.body), null, window.innerHeight, { focused: true });
     }
-    const frame = readShellKeyboard({
+    const raw = readShellKeyboard({
       shellHeight: rect.height,
       innerHeight: window.innerHeight,
       viewport: window.visualViewport,
       safeBottom: safeBottomPx(),
-      focused,
-      forceClosed: forceKeyboardClosed && !focused,
+      focused: focused || focusWithin,
       cssKeyboard,
     });
-    root.style.setProperty('--aos-kb', `${frame.overlap}px`);
-    root.style.setProperty('--aos-keyboard', `${frame.overlap}px`);
-    root.classList.toggle('is-keyboard', frame.keyboardOpen);
+    const next = stepKeyboardInset(kbState, {
+      now: Date.now(),
+      overlap: raw.overlap,
+      focused,
+      focusWithin,
+      pointerWithin,
+      viewportClosed: !raw.keyboardOpen,
+    });
+    kbState = { offset: next.offset, openSince: next.openSince };
+    if (next.retryIn > 0) {
+      if (!openTimer) openTimer = setTimeout(() => {
+        openTimer = 0;
+        applyKeyboardInset();
+      }, next.retryIn);
+    } else if (openTimer) {
+      clearTimeout(openTimer);
+      openTimer = 0;
+    }
+    if (next.collapse) root.classList.add('is-kb-collapse');
+    else if (next.offset > 0) root.classList.remove('is-kb-collapse');
+    root.style.setProperty('--aos-kb', `${next.offset}px`);
+    root.style.setProperty('--aos-keyboard', `${next.offset}px`);
+    root.classList.toggle('is-keyboard', next.keyboardOpen);
   }
 
-  function settleKeyboard() {
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      if (composerFocused()) return;
-      forceKeyboardClosed = true;
+  function scheduleKeyboardInset() {
+    if (kbFrame || disposed) return;
+    const run = () => {
+      kbFrame = 0;
       applyKeyboardInset();
-    }, 600);
+    };
+    kbFrame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 16);
   }
 
-  composerHost.addEventListener('focusin', () => {
-    forceKeyboardClosed = false;
-    clearTimeout(settleTimer);
-    applyKeyboardInset();
+  composerHost.addEventListener('focusin', () => scheduleKeyboardInset());
+  composerHost.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && composerHost.contains(next)) return;
+    scheduleKeyboardInset();
   });
-  composerHost.addEventListener('focusout', () => {
-    applyKeyboardInset();
-    settleKeyboard();
-  });
+  composerHost.addEventListener('pointerdown', () => {
+    pointerWithin = true;
+  }, true);
+  const releasePointer = () => {
+    if (!pointerWithin) return;
+    pointerWithin = false;
+    scheduleKeyboardInset();
+  };
+  composerHost.addEventListener('pointerup', releasePointer, true);
+  composerHost.addEventListener('pointercancel', releasePointer, true);
 
   function bindNavbar() {
     const nav = document.querySelector('.mobile-navbar');
@@ -488,9 +523,13 @@ export function mountAgentApp(container, deps) {
 
   return {
     destroy() {
+      disposed = true;
       unsubCtrl?.();
       detachCtrl?.();
-      clearTimeout(settleTimer);
+      if (kbFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(kbFrame);
+      kbFrame = 0;
+      clearTimeout(openTimer);
+      openTimer = 0;
       unbindKeyboard();
       unbindNavbar();
       unbindLeafWatch();

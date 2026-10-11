@@ -139,8 +139,8 @@ export function readVisibleFrame(opts = {}) {
  *
  * If Obsidian has already shrunk the leaf to the visual viewport, the gap is 0
  * and we add nothing — we do not stack a second keyboard offset on top of
- * Obsidian's own resize. A stuck gap after the keyboard is dismissed is cleared
- * by `forceClosed` (blur / settle), not by snapping mid-animation.
+ * Obsidian's own resize. `forceClosed` is the closed frame when the published
+ * offset is already 0 but the viewport still reports a leftover gap.
  *
  * @param {{
  *   shellHeight?: number,
@@ -181,8 +181,8 @@ export function readShellKeyboard(opts = {}) {
 /**
  * Panel rectangle pinned to the visual viewport.
  * The viewport already ends above the keyboard, so the keyboard is not
- * subtracted a second time. After blur, `forceClosed` drops a stale gap and
- * the panel uses the full layout height (safe area + navbar once).
+ * subtracted a second time. `forceClosed` drops a stale gap and the panel
+ * uses the full layout height (safe area + navbar once).
  *
  * @param {{
  *   innerWidth?: number,
@@ -240,6 +240,62 @@ export function planViewportBox(opts = {}) {
     keyboardOpen: true,
     bottomInset,
     settled: false,
+  };
+}
+
+/** How long a new keyboard gap must last before it is published. Closing does not wait. */
+export const KEYBOARD_OPEN_DELAY_MS = 80;
+
+/**
+ * The offset written to `--aos-kb`.
+ *
+ * Closing publishes 0 on this sample: blur that leaves the composer, or a
+ * visual viewport that has returned to the layout height. The caller writes
+ * the variable on the next animation frame. Opening waits `openDelayMs` so a
+ * focus flicker does not flash a gap. A finger on Send, or focus moving to
+ * another control in the composer, holds the current offset.
+ *
+ * @param {{ offset?: number, openSince?: number }} [prev]
+ * @param {{
+ *   now?: number,
+ *   overlap?: number,
+ *   focused?: boolean,
+ *   focusWithin?: boolean,
+ *   pointerWithin?: boolean,
+ *   viewportClosed?: boolean,
+ * }} [sample]
+ * @param {number} [openDelayMs]
+ * `retryIn` is how long the caller should wait before sampling again. It is
+ * set only while an open is being held back, so a single viewport event still
+ * publishes the gap once the delay has passed.
+ *
+ * @returns {{ offset: number, openSince: number, keyboardOpen: boolean, collapse: boolean, retryIn: number }}
+ */
+export function stepKeyboardInset(prev = {}, sample = {}, openDelayMs = KEYBOARD_OPEN_DELAY_MS) {
+  const previous = Math.max(0, Number(prev.offset) || 0);
+  const overlap = Math.max(0, Number(sample.overlap) || 0);
+  const delay = Math.max(0, Number(openDelayMs) || 0);
+  const now = Number(sample.now) || 0;
+  const inside = !!(sample.focused || sample.focusWithin || sample.pointerWithin);
+  const viewportClosed = sample.viewportClosed === true || overlap === 0;
+  const closed = (collapse) => ({ offset: 0, openSince: 0, keyboardOpen: false, collapse, retryIn: 0 });
+
+  if (!inside || viewportClosed) return closed(previous > 0);
+
+  if (previous === 0) {
+    const openSince = Number(prev.openSince) || now;
+    const retryIn = delay - (now - openSince);
+    if (retryIn > 0) {
+      return { offset: 0, openSince, keyboardOpen: false, collapse: false, retryIn };
+    }
+  }
+
+  return {
+    offset: overlap,
+    openSince: Number(prev.openSince) || now,
+    keyboardOpen: overlap > 0,
+    collapse: false,
+    retryIn: 0,
   };
 }
 
