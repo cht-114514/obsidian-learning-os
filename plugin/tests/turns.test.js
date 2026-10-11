@@ -8,7 +8,7 @@ import {
   stripInjectedContext,
 } from '../src/ui/turns.js';
 import { groupSessions, isUserSession, sessionLabel, sessionPreview } from '../src/ui/sidebar.js';
-import { describeTool, formatDuration, workHeadline } from '../src/ui/work-run.js';
+import { describeTool, formatDuration, liveActivityLine, shortToolTarget, workHeadline } from '../src/ui/work-run.js';
 import { enterInsertsNewline, nextComposerAction, shouldIgnoreEnter } from '../src/ui/composer.js';
 import { reduceActivity } from '../src/kernel/activity.js';
 
@@ -143,6 +143,19 @@ describe('work run copy', () => {
     };
     assert.equal(workHeadline(activity), '已工作 4 分 52 秒 · 2 次工具调用');
     assert.match(workHeadline({ tools: [], status: '思考中' }, { streaming: true }), /思考中/);
+    const path = 'Read from ~/Documents/Me.Inc/基础学科/数学/数学随感/基本思考方向：几何与代数.md';
+    const line = liveActivityLine({ tools: [{ name: 'read', phase: 'start', title: path }] });
+    assert.equal(line.specific, true);
+    assert.equal(line.card, '正在做… 读取笔记 · 基本思考方向…');
+    assert.equal(line.strip, '进行中');
+    assert.equal(line.full, path);
+    assert.equal(shortToolTarget(path).name, '基本思考方向…');
+    assert.equal(
+      workHeadline({ tools: [{ name: 'read', phase: 'start', title: path }] }, { streaming: true }),
+      line.card
+    );
+    assert.equal(describeTool({ name: 'read', phase: 'done', title: path }).target, '基本思考方向…');
+    assert.equal(describeTool({ name: 'read', phase: 'done', title: path }).full, path);
   });
 });
 

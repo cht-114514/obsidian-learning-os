@@ -12,7 +12,8 @@ import { serviceMessagesFromPayload, serviceSessionsFromPayload } from './servic
 import { isUserSession } from '../ui/sidebar.js';
 import { canonicalSessionKey } from '../single-session.js';
 import { nextStepFor, phaseLabel } from '../ui/turn-phase.js';
-import { macLinkLabel } from '../ui/delivery.js';
+import { liveActivityLine } from '../ui/work-run.js';
+import { isDeliveryPlaceholder, macLinkLabel } from '../ui/delivery.js';
 import { choosePack, isCompletePack, withDeadline, PREP_TIMEOUT_MS } from '../ui/send-prep.js';
 import { AOS_BUILD } from '../ui/build-id.js';
 import { formatSnapshotForPrompt } from '../context-snapshot-pure.js';
@@ -650,6 +651,7 @@ export function createChatController(plugin, app, hooks = {}) {
       draft.turnStatus = 'sending';
       draft.sendingAt = draft.sendingAt || Date.now();
       draft.streaming = true;
+      if (isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
       draft.activity = { reasoning: '', tools: [], status: '发出到 Mac…', startedAt: draft.sendingAt };
     }
     if (onActive) {
@@ -672,6 +674,7 @@ export function createChatController(plugin, app, hooks = {}) {
         onAccepted: (receipt) => {
           state.stage.receipt = receipt.serverTurnId ? 'ok' : '';
           if (!draft) return;
+          if (isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
           draft.serverTurnId = receipt.serverTurnId;
           draft.serviceCursor = receipt.cursor || 0;
           draft.model = receipt.model || turn.model || '';
@@ -687,6 +690,7 @@ export function createChatController(plugin, app, hooks = {}) {
         },
         onProgress: (event) => {
           if (!draft) return;
+          if (!event.text && isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
           if (event.text) {
             draft.text = event.text;
             draft.lastProgressAt = Date.now();
@@ -778,10 +782,9 @@ export function createChatController(plugin, app, hooks = {}) {
     }
     const since = draft.lastProgressAt || state.startedAt || Date.now();
     const idle = Date.now() - since;
-    const tools = draft.activity?.tools || [];
-    if (tools.length) {
-      const tool = tools[tools.length - 1];
-      state.progressLabel = tool.title || tool.name || '正在回复';
+    const live = liveActivityLine(draft.activity);
+    if (live.specific) {
+      state.progressLabel = live.strip;
     } else if (idle >= 30000 && !String(draft.text || '').trim()) {
       const secs = Math.floor(idle / 1000);
       const stamp = new Date(since);

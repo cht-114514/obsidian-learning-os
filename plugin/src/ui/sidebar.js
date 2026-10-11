@@ -69,7 +69,7 @@ export function groupSessions(sessions, opts = {}) {
 
 /**
  * @param {HTMLElement} el
- * @param {{ onNew: () => void, onSelect: (key: string) => void, onDelete?: (key: string) => void, onBack?: () => void }} handlers
+ * @param {{ onNew: () => void, onSelect: (key: string) => void, onDelete?: (key: string) => void, onBack?: () => void, onClose?: () => void }} handlers
  */
 export function mountSidebar(el, handlers) {
   el.empty();
@@ -81,6 +81,12 @@ export function mountSidebar(el, handlers) {
   const sub = names.createDiv({ cls: 'aos-identity-sub' });
   sub.createSpan({ cls: 'aos-status-dot' });
   const subText = sub.createSpan({ cls: 'aos-status-text', text: '未连接' });
+  const close = head.createEl('button', {
+    cls: 'aos-side-close',
+    text: '×',
+    attr: { type: 'button', 'aria-label': '关闭' },
+  });
+  close.onclick = () => (handlers.onClose || handlers.onBack)?.();
   const search = el.createEl('input', {
     cls: 'aos-search',
     attr: { type: 'search', placeholder: '搜索会话', 'aria-label': '搜索会话' },

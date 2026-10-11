@@ -187,8 +187,9 @@ export function mountChatPane(el, deps) {
     const retry = host.querySelector('.aos-delivery-retry');
     if (label) label.textContent = view.label || '';
     if (detail) {
-      detail.textContent = view.detail || '';
-      detail.hidden = !view.detail;
+      const live = view.state === 'delivered' || view.state === 'processing' || view.state === 'sending';
+      detail.textContent = live ? '' : view.detail || '';
+      detail.hidden = live || !view.detail;
     }
     if (retry) {
       retry.hidden = !view.canRetry;
@@ -243,8 +244,24 @@ export function mountChatPane(el, deps) {
       if (node.manifestBody) node.manifestBody.setText(detail);
     }
     const text = message.text || '';
-    const placeholder = role === 'assistant' && isDeliveryPlaceholder(text) && message.turnStatus && message.turnStatus !== 'sent';
-    node.group.hidden = !!placeholder;
+    const placeholder =
+      role === 'assistant' && isDeliveryPlaceholder(text) && message.turnStatus && message.turnStatus !== 'sent';
+    const activity = message.activity;
+    const hasWork = !!(
+      activity &&
+      ((activity.tools && activity.tools.length) ||
+        String(activity.reasoning || '').trim() ||
+        String(activity.status || '').trim())
+    );
+    if (placeholder) {
+      node.bubble.hidden = true;
+      node.bubble.empty();
+      node.text = '';
+      node.group.hidden = !hasWork;
+    } else if (role === 'assistant') {
+      node.bubble.hidden = false;
+      node.group.hidden = false;
+    }
     if (role === 'user') {
       const shown = visibleUserText(message);
       if (node.text !== shown) {
@@ -274,6 +291,7 @@ export function mountChatPane(el, deps) {
         }
       }
     }
+    if (placeholder) return;
     const textChanged = node.text !== text || node.done === !!message.streaming;
     if (!textChanged) return;
     paintBody(node, message, !message.streaming);

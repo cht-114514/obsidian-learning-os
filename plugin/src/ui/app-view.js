@@ -114,6 +114,10 @@ export function mountAgentApp(container, deps) {
       paintChrome();
       deps.onReturnToNotes?.();
     },
+    onClose: () => {
+      state.sidebarOpen = false;
+      paintChrome();
+    },
   });
 
   const thread = mountChatPane(log, {
