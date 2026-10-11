@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { navbarReservePx, resolveMobileKeyboardPx, composerOffsetPx, readVisibleFrame } from '../src/ui/mobile-insets.js';
+import { navbarReservePx, resolveMobileKeyboardPx, composerOffsetPx, readVisibleFrame, readShellKeyboard, planViewportBox, stepKeyboardInset } from '../src/ui/mobile-insets.js';
 
 test('resolveMobileKeyboardPx prefers Obsidian --keyboard-height', () => {
   const style = {
@@ -166,6 +166,154 @@ test('readVisibleFrame falls back to --keyboard-height only while focused', () =
   assert.equal(closed.keyboardOpen, false);
   assert.equal(closed.bottomInset, 34 + 88);
   assert.equal(closed.height, 844 - (12 + 47) - closed.bottomInset);
+});
+
+test('readShellKeyboard follows the visual viewport and does not add a second keyboard offset', () => {
+  const open = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 500, offsetTop: 0, scale: 1 },
+    safeBottom: 34,
+    focused: true,
+  });
+  assert.equal(open.keyboardOpen, true);
+  assert.equal(open.overlap, 352);
+  assert.equal(open.settled, false);
+  // Obsidian already shrank the leaf to the visual viewport: overlap stays 0.
+  const resized = readShellKeyboard({
+    shellHeight: 500,
+    innerHeight: 852,
+    viewport: { height: 500, offsetTop: 0, scale: 1 },
+    safeBottom: 34,
+    focused: true,
+  });
+  assert.equal(resized.overlap, 0);
+  assert.equal(resized.keyboardOpen, false);
+});
+
+test('readShellKeyboard snaps a stuck gap only after blur asks it to settle', () => {
+  const stuck = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 520, offsetTop: 40, scale: 1 },
+    safeBottom: 34,
+    focused: false,
+  });
+  assert.equal(stuck.keyboardOpen, true);
+  assert.ok(stuck.overlap > 0);
+  const settled = readShellKeyboard({
+    shellHeight: 852,
+    innerHeight: 852,
+    viewport: { height: 520, offsetTop: 40, scale: 1 },
+    safeBottom: 34,
+    focused: false,
+    forceClosed: true,
+  });
+  assert.equal(settled.overlap, 0);
+  assert.equal(settled.settled, true);
+});
+
+test('planViewportBox tracks the visual viewport and returns to the full frame when settled', () => {
+  const open = planViewportBox({
+    innerWidth: 390,
+    innerHeight: 844,
+    viewport: { width: 390, height: 420, offsetTop: 0, offsetLeft: 0, scale: 1 },
+    safeTop: 47,
+    safeBottom: 34,
+    navStack: 88,
+    margin: 12,
+    focused: true,
+  });
+  assert.equal(open.keyboardOpen, true);
+  assert.equal(open.bottomInset, 8);
+  assert.equal(open.top, 12);
+  assert.equal(open.height, 400);
+  const closed = planViewportBox({
+    innerWidth: 390,
+    innerHeight: 844,
+    viewport: { width: 390, height: 800, offsetTop: 20, offsetLeft: 0, scale: 1 },
+    safeTop: 47,
+    safeBottom: 34,
+    navStack: 88,
+    margin: 12,
+    focused: false,
+    forceClosed: true,
+  });
+  assert.equal(closed.keyboardOpen, false);
+  assert.equal(closed.top, 12 + 47);
+  assert.equal(closed.bottomInset, 34 + 88);
+  assert.equal(closed.height, 844 - closed.top - closed.bottomInset);
+});
+
+test('stepKeyboardInset collapses immediately and delays only the opening gap', () => {
+  const delay = 80;
+  const waiting = stepKeyboardInset(
+    { offset: 0, openSince: 0 },
+    { now: 1_000, overlap: 320, focused: true, viewportClosed: false },
+    delay
+  );
+  assert.equal(waiting.offset, 0);
+  assert.equal(waiting.keyboardOpen, false);
+  assert.equal(waiting.collapse, false);
+  assert.equal(waiting.retryIn, 80);
+  const still = stepKeyboardInset(waiting, { now: 1_050, overlap: 320, focused: true, viewportClosed: false }, delay);
+  assert.equal(still.offset, 0);
+  const opened = stepKeyboardInset(still, { now: 1_080, overlap: 340, focused: true, viewportClosed: false }, delay);
+  assert.equal(opened.offset, 340);
+  assert.equal(opened.keyboardOpen, true);
+
+  // Already open: a shrinking gap is published immediately.
+  const shrinking = stepKeyboardInset(opened, { now: 1_100, overlap: 180, focused: true, viewportClosed: false }, delay);
+  assert.equal(shrinking.offset, 180);
+  assert.equal(shrinking.collapse, false);
+
+  // Viewport back to the layout height: clear on this sample, even if the field is focused.
+  const closed = stepKeyboardInset(shrinking, { now: 1_110, overlap: 0, focused: true, viewportClosed: true }, delay);
+  assert.equal(closed.offset, 0);
+  assert.equal(closed.keyboardOpen, false);
+  assert.equal(closed.collapse, true);
+
+  // Blur while iOS still reports a gap: do not wait out a settle timer.
+  const blurred = stepKeyboardInset(opened, {
+    now: 2_000,
+    overlap: 340,
+    focused: false,
+    focusWithin: false,
+    pointerWithin: false,
+    viewportClosed: false,
+  }, delay);
+  assert.equal(blurred.offset, 0);
+  assert.equal(blurred.collapse, true);
+  const stale = stepKeyboardInset(blurred, {
+    now: 2_016,
+    overlap: 340,
+    focused: false,
+    viewportClosed: false,
+  }, delay);
+  assert.equal(stale.offset, 0);
+  assert.equal(stale.collapse, false);
+
+  // Send (finger still down) and a move to another composer control hold the gap.
+  const send = stepKeyboardInset(opened, {
+    now: 3_000,
+    overlap: 340,
+    focused: false,
+    focusWithin: false,
+    pointerWithin: true,
+    viewportClosed: false,
+  }, delay);
+  assert.equal(send.offset, 340);
+  assert.equal(send.collapse, false);
+  const moved = stepKeyboardInset(opened, {
+    now: 3_100,
+    overlap: 340,
+    focused: false,
+    focusWithin: true,
+    pointerWithin: false,
+    viewportClosed: false,
+  }, delay);
+  assert.equal(moved.offset, 340);
+  assert.equal(moved.collapse, false);
 });
 
 test('navbarReservePx prefers viewport stack over box estimate', () => {

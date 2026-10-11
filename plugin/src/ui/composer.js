@@ -18,6 +18,23 @@ export function enterInsertsNewline(mobile) {
 }
 
 /**
+ * Enter that is confirming an IME candidate (Chinese pinyin, Japanese, …)
+ * must not send the message. `compositionend` often fires before the Enter
+ * keydown, so a short quiet period after it is treated the same way.
+ * @param {KeyboardEvent | { key?: string, shiftKey?: boolean, isComposing?: boolean, keyCode?: number }} event
+ * @param {{ composing?: boolean, compositionEndedAt?: number }} [state]
+ * @param {number} [now]
+ */
+export function shouldIgnoreEnter(event, state = {}, now = Date.now()) {
+  if (!event || event.key !== 'Enter' || event.shiftKey) return false;
+  if (state.composing || event.isComposing) return true;
+  if (event.keyCode === 229) return true;
+  const ended = Number(state.compositionEndedAt) || 0;
+  if (ended > 0 && now - ended >= 0 && now - ended < 100) return true;
+  return false;
+}
+
+/**
  * Cap a growing textarea. maxPx 0 means "use the line count only".
  * A short visible frame can pass a smaller maxPx so the send button stays on screen.
  */
@@ -176,6 +193,8 @@ export function mountComposer(el, opts) {
   let clock = 0;
   /** Texts currently being saved/sent; guards against double submission. */
   let composing = false;
+  let compositionEndedAt = 0;
+  let submitLock = false;
   const submitPending = new Set();
 
   function paintAction() {
@@ -191,7 +210,7 @@ export function mountComposer(el, opts) {
       action.disabled = false;
       return;
     }
-    const empty = !input.value.trim();
+    const empty = !input.value.trim() || submitLock;
     action.toggleClass('is-disabled', empty);
     action.disabled = empty;
   }
@@ -428,12 +447,14 @@ export function mountComposer(el, opts) {
    * user typed can be lost.
    */
   async function submit() {
-    if (composing) return;
+    if (composing || submitLock) return;
     if (nextComposerAction(busy, 'submit') !== 'send') return;
     const text = input.value.trim();
     if (!text) return;
     if (submitPending.has(text)) return;
     submitPending.add(text);
+    submitLock = true;
+    paintSendEnabled();
     let result;
     try {
       result = await opts.onSend(text);
@@ -442,6 +463,8 @@ export function mountComposer(el, opts) {
       opts.onNotice?.(error?.message || '没有发出去');
     }
     submitPending.delete(text);
+    submitLock = false;
+    paintSendEnabled();
     if (result && result.ok === false) {
       input.value = text;
       grow();
@@ -468,6 +491,7 @@ export function mountComposer(el, opts) {
   });
   input.addEventListener('compositionend', () => {
     composing = false;
+    compositionEndedAt = Date.now();
     paintSendEnabled();
   });
   input.addEventListener('input', () => {
@@ -478,7 +502,8 @@ export function mountComposer(el, opts) {
     paintSendEnabled();
   });
   input.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || event.shiftKey || composing) return;
+    if (shouldIgnoreEnter(event, { composing, compositionEndedAt })) return;
+    if (event.key !== 'Enter' || event.shiftKey) return;
     if (enterInsertsNewline(opts.mobile)) return;
     event.preventDefault();
     submit();

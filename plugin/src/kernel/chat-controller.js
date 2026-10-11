@@ -12,6 +12,8 @@ import { serviceMessagesFromPayload, serviceSessionsFromPayload } from './servic
 import { isUserSession } from '../ui/sidebar.js';
 import { canonicalSessionKey } from '../single-session.js';
 import { nextStepFor, phaseLabel } from '../ui/turn-phase.js';
+import { liveActivityLine } from '../ui/work-run.js';
+import { isDeliveryPlaceholder, macLinkLabel } from '../ui/delivery.js';
 import { choosePack, isCompletePack, withDeadline, PREP_TIMEOUT_MS } from '../ui/send-prep.js';
 import { AOS_BUILD } from '../ui/build-id.js';
 import { formatSnapshotForPrompt } from '../context-snapshot-pure.js';
@@ -39,6 +41,13 @@ export function createChatController(plugin, app, hooks = {}) {
   const prepTokens = new Map();
   const livePolls = new Set();
   let resumingTurns = false;
+  let macLastSeenAt = 0;
+  let macKernel = '';
+
+  function rememberMac(online, kernel) {
+    if (online) macLastSeenAt = Date.now();
+    if (kernel) macKernel = String(kernel);
+  }
   function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
   function attachView(h) {
     viewHooks.push(h);
@@ -555,6 +564,7 @@ export function createChatController(plugin, app, hooks = {}) {
     if (draft) {
       draft.text = '';
       draft.turnStatus = 'sending';
+      draft.sendingAt = draft.sendingAt || Date.now();
       draft.streaming = true;
       draft.activity = { reasoning: '', tools: [], status: '发出排队消息…', startedAt: Date.now() };
     }
@@ -639,8 +649,10 @@ export function createChatController(plugin, app, hooks = {}) {
     const rows = loaded.rows;
     if (draft) {
       draft.turnStatus = 'sending';
+      draft.sendingAt = draft.sendingAt || Date.now();
       draft.streaming = true;
-      draft.activity = { reasoning: '', tools: [], status: '发出到 Mac…', startedAt: Date.now() };
+      if (isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
+      draft.activity = { reasoning: '', tools: [], status: '发出到 Mac…', startedAt: draft.sendingAt };
     }
     if (onActive) {
       state.busy = true;
@@ -662,6 +674,7 @@ export function createChatController(plugin, app, hooks = {}) {
         onAccepted: (receipt) => {
           state.stage.receipt = receipt.serverTurnId ? 'ok' : '';
           if (!draft) return;
+          if (isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
           draft.serverTurnId = receipt.serverTurnId;
           draft.serviceCursor = receipt.cursor || 0;
           draft.model = receipt.model || turn.model || '';
@@ -677,6 +690,7 @@ export function createChatController(plugin, app, hooks = {}) {
         },
         onProgress: (event) => {
           if (!draft) return;
+          if (!event.text && isDeliveryPlaceholder(draft.text) && String(draft.text || '').trim()) draft.text = '';
           if (event.text) {
             draft.text = event.text;
             draft.lastProgressAt = Date.now();
@@ -768,10 +782,9 @@ export function createChatController(plugin, app, hooks = {}) {
     }
     const since = draft.lastProgressAt || state.startedAt || Date.now();
     const idle = Date.now() - since;
-    const tools = draft.activity?.tools || [];
-    if (tools.length) {
-      const tool = tools[tools.length - 1];
-      state.progressLabel = tool.title || tool.name || '正在回复';
+    const live = liveActivityLine(draft.activity);
+    if (live.specific) {
+      state.progressLabel = live.strip;
     } else if (idle >= 30000 && !String(draft.text || '').trim()) {
       const secs = Math.floor(idle / 1000);
       const stamp = new Date(since);
@@ -820,23 +833,36 @@ export function createChatController(plugin, app, hooks = {}) {
 
   function connectionState() {
     const mobileClient = isPhoneApp() || plugin.entryMode?.() === 'service';
+    let base;
     if (entryMode() === 'service' || (mobileClient && !plugin.deviceCredential?.())) {
       const device = plugin.deviceInfo?.();
       if (!plugin.deviceCredential?.()) {
-        return {
+        base = {
           state: 'offline',
           message: '还没有配对这台设备，消息只会留在本机',
           needsPairing: true,
         };
+      } else if (state.serviceError) {
+        base = { state: 'offline', message: state.serviceError, paired: true };
+      } else {
+        base = {
+          state: 'live',
+          message: `已配对${device?.name ? ` · ${device.name}` : ''}`,
+          paired: true,
+        };
       }
-      if (state.serviceError) return { state: 'offline', message: state.serviceError, paired: true };
-      return {
-        state: 'live',
-        message: `已配对${device?.name ? ` · ${device.name}` : ''}`,
-        paired: true,
-      };
+    } else {
+      base = plugin.operator?.status || { state: 'offline', message: '尚未连接' };
     }
-    return plugin.operator?.status || { state: 'offline', message: '尚未连接' };
+    if (base.state === 'live') rememberMac(true);
+    const mac = macLinkLabel({
+      state: base.state,
+      needsPairing: base.needsPairing,
+      lastSeenAt: macLastSeenAt,
+      kernel: macKernel,
+      syncing: !!state.sessionsLoading,
+    });
+    return { ...base, lastSeenAt: macLastSeenAt, kernel: macKernel, mac };
   }
 
   function isLive() {
@@ -893,11 +919,17 @@ export function createChatController(plugin, app, hooks = {}) {
       if (draft) {
         draft.turnStatus = status;
         draft.streaming = status === 'sending';
+        if (status === 'sending' && !draft.sendingAt) draft.sendingAt = Date.now();
         if (status === 'unknown') {
           draft.text = draft.text || '状态未知，需要核对';
+          draft.errorHint = draft.errorHint || text || '没拿到 Mac 的回执。原文还在。';
           draft.streaming = false;
         } else if (status === 'error' && text) {
           draft.text = draft.text || `出错了：${text}`;
+          draft.errorHint = draft.errorHint || text;
+          draft.streaming = false;
+        } else if (status === 'failed' && text) {
+          draft.errorHint = draft.errorHint || text;
           draft.streaming = false;
         }
       }
@@ -909,6 +941,10 @@ export function createChatController(plugin, app, hooks = {}) {
     if (draft) {
       draft.turnStatus = status;
       draft.streaming = status === 'sending';
+      if (status === 'sending' && !draft.sendingAt) draft.sendingAt = Date.now();
+      if ((status === 'error' || status === 'failed' || status === 'unknown') && text) {
+        draft.errorHint = draft.errorHint || text;
+      }
       saveSessionTranscript(key, rows);
     }
   }
@@ -1088,7 +1124,11 @@ export function createChatController(plugin, app, hooks = {}) {
       return false;
     }
     try {
-      await client.health();
+      const response = await client.health();
+      const body = response?.json || {};
+      const kernelLive = body.kernel?.live;
+      const kernelState = body.kernel?.state || '';
+      rememberMac(true, kernelLive === false ? kernelState || 'down' : kernelState || 'live');
       await plugin.loadServiceCatalog?.().catch(() => {});
       state.serviceError = '';
       return true;

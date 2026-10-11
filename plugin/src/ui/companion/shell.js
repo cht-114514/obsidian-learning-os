@@ -10,6 +10,7 @@ import { placeholderFor } from '../connection-view.js';
 import { captureContextSnapshot, liveContextLabel } from '../../context-snapshot.js';
 import { buildApplyPreview, applyCompanionEdit } from '../../companion-apply.js';
 import {
+  companionPresentation,
   defaultCapsulePos,
   loadCapsulePos,
   nextCompanionMode,
@@ -17,7 +18,8 @@ import {
   saveCapsulePos,
   shouldThawQuote,
 } from './layout.js';
-import { bindViewportListeners, navbarReservePx, readVisibleFrame } from '../mobile-insets.js';
+import { bindViewportListeners, navbarReservePx, planViewportBox, stepKeyboardInset } from '../mobile-insets.js';
+import { macLinkLabel } from '../delivery.js';
 import { loadSessionFromPath, SESSION_PATH } from '../../chat-history.js';
 
 const ICON_MORE =
@@ -49,6 +51,11 @@ export function createCompanionController(app, plugin, deps) {
   let composerHost = null;
   let contextEl = null;
   let titleEl = null;
+  let macEl = null;
+  let kbState = { offset: 0, openSince: 0 };
+  let pointerWithin = false;
+  let frameCache = null;
+  let openTimer = 0;
   let quoteWrap = null;
   let quoteTextEl = null;
   let excerptEl = null;
@@ -214,9 +221,18 @@ export function createCompanionController(app, plugin, deps) {
     excerptEl.hidden = !text;
   }
 
+  function safePx(name) {
+    try {
+      const parsed = parseFloat(getComputedStyle(document.body).getPropertyValue(name).trim());
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   function currentFrame() {
+    if (frameCache) return frameCache;
     const override = typeof deps.previewViewport === 'function' ? deps.previewViewport() : deps.previewViewport;
-    const bodyStyle = getComputedStyle(document.body);
     let navStack = 0;
     if (mobile && !override) {
       const navEl = document.querySelector('.mobile-navbar');
@@ -225,16 +241,46 @@ export function createCompanionController(app, plugin, deps) {
       }
       if (!navStack) navStack = 88;
     }
-    const focused = !!composerHost?.querySelector('textarea')?.matches?.(':focus');
-    return readVisibleFrame({
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const focusWithin = !!(composerHost && active && composerHost.contains(active));
+    const focused = !!(focusWithin && active.matches?.('textarea, input'));
+    const box = {
       innerWidth: window.innerWidth,
       innerHeight: window.innerHeight,
       viewport: override || window.visualViewport,
-      bodyStyle,
-      focused,
+      safeTop: safePx('--safe-area-inset-top'),
+      safeBottom: safePx('--safe-area-inset-bottom'),
+      focused: focused || focusWithin,
       navStack,
       margin: 12,
+    };
+    const raw = planViewportBox(box);
+    const next = stepKeyboardInset(kbState, {
+      now: Date.now(),
+      overlap: raw.keyboardPx,
+      focused,
+      focusWithin,
+      pointerWithin,
+      viewportClosed: !raw.keyboardOpen,
     });
+    kbState = { offset: next.offset, openSince: next.openSince };
+    if (next.retryIn > 0) {
+      if (!openTimer) {
+        openTimer = setTimeout(() => {
+          openTimer = 0;
+          place();
+        }, next.retryIn);
+      }
+    } else if (openTimer) {
+      clearTimeout(openTimer);
+      openTimer = 0;
+    }
+    const frame = next.offset > 0 || !raw.keyboardOpen ? raw : planViewportBox({ ...box, forceClosed: true });
+    frameCache = frame;
+    queueMicrotask(() => {
+      frameCache = null;
+    });
+    return frame;
   }
 
   function lockBackground() {
@@ -286,6 +332,7 @@ export function createCompanionController(app, plugin, deps) {
   function placePanel() {
     if (!panel || mode === 'collapsed') return;
     const frame = currentFrame();
+    panel.toggleClass('is-vv', !!frame.keyboardOpen);
     const room = Math.max(24, Math.min(96, frame.height - 148));
     composer?.setMaxInputHeight?.(room);
     if (mode === 'expanded') {
@@ -364,13 +411,28 @@ export function createCompanionController(app, plugin, deps) {
       plugin.connectionPrefs?.().model || ''
     );
     const status = connectionState();
+    const link = status.mac || macLinkLabel({
+      state: status.state,
+      needsPairing: status.needsPairing,
+      lastSeenAt: status.lastSeenAt || 0,
+      kernel: status.kernel || '',
+    });
+    if (macEl) {
+      macEl.setText(link.text);
+      macEl.className = `aos-mac-link is-${link.tone}`;
+    }
     const placeholder = status.state === 'live' ? '接着问…' : placeholderFor(status.state, name);
     composer?.setPlaceholder(placeholder);
-    const fullscreen = !!plugin.isChatViewActive?.();
-    root.toggleClass('is-hidden', fullscreen);
-    document.body.classList.toggle('aos-companion-open', mode !== 'collapsed' && !fullscreen);
-    if (fullscreen) unlockBackground();
+    const presentation = companionPresentation({ mode }, !!plugin.isChatViewActive?.());
+    root.toggleClass('is-covered', presentation.covered);
+    root.removeClass('is-hidden');
+    document.body.classList.toggle('aos-companion-open', mode !== 'collapsed' && !presentation.covered);
+    if (presentation.covered) unlockBackground();
     else if (mode === 'expanded') lockBackground();
+  }
+
+  function syncChatCover() {
+    syncUi();
   }
 
   function setMode(next) {
@@ -456,7 +518,9 @@ export function createCompanionController(app, plugin, deps) {
     panel.createDiv({ cls: 'aos-companion-pointer', attr: { 'aria-hidden': 'true' } });
     const head = panel.createDiv({ cls: 'aos-companion-head' });
     head.createSpan({ cls: 'aos-companion-mark', attr: { 'aria-hidden': 'true' } });
-    titleEl = head.createDiv({ cls: 'aos-companion-title', text: plugin.settings.agentName || 'Agent' });
+    const titleBlock = head.createDiv({ cls: 'aos-companion-titleblock' });
+    titleEl = titleBlock.createDiv({ cls: 'aos-companion-title', text: plugin.settings.agentName || 'Agent' });
+    macEl = titleBlock.createDiv({ cls: 'aos-mac-link', text: '正在连接 Mac' });
     const headActions = head.createDiv({ cls: 'aos-companion-head-actions' });
     iconButton(headActions, 'aos-companion-more', '更多', ICON_MORE, () => composer?.openMore?.());
     iconButton(headActions, 'aos-companion-expand', '展开对话', ICON_EXPAND, () => setMode('expanded'));
@@ -527,6 +591,7 @@ export function createCompanionController(app, plugin, deps) {
       onFocus: () => {
         freezeQuote();
         if (mode !== 'expanded') setMode('expanded');
+        place();
       },
       onThinking: (id) => plugin.setConnectionPrefs?.({ thinking: id }),
       onModel: (id) => plugin.setKernelModel?.(id),
@@ -543,6 +608,26 @@ export function createCompanionController(app, plugin, deps) {
       },
       true
     );
+    const schedulePlace = (fn) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+      else setTimeout(fn, 16);
+    };
+    composerHost.addEventListener('focusin', () => place());
+    composerHost.addEventListener('focusout', (event) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && composerHost.contains(next)) return;
+      schedulePlace(() => place());
+    });
+    composerHost.addEventListener('pointerdown', () => {
+      pointerWithin = true;
+    }, true);
+    const releasePointer = () => {
+      if (!pointerWithin) return;
+      pointerWithin = false;
+      schedulePlace(() => place());
+    };
+    composerHost.addEventListener('pointerup', releasePointer, true);
+    composerHost.addEventListener('pointercancel', releasePointer, true);
 
     capsule.addEventListener('click', () => {
       if (capsule.dataset.suppressClick === '1') {
@@ -647,7 +732,7 @@ export function createCompanionController(app, plugin, deps) {
     const onStructure = () => {
       if (!quoteFrozen) paintQuote();
       if (mode === 'peek') place();
-      syncUi();
+      syncChatCover();
     };
     const onEditor = () => {
       if (quoteFrozen) return;
@@ -740,6 +825,8 @@ export function createCompanionController(app, plugin, deps) {
     detachView?.();
     unbindViewport?.();
     unbindViewport = null;
+    clearTimeout(openTimer);
+    openTimer = 0;
     document.removeEventListener('keydown', onKeydown);
     document.removeEventListener('pointerdown', onDocPointerDown, true);
     unlockBackground();
@@ -776,6 +863,7 @@ export function createCompanionController(app, plugin, deps) {
     expand: () => setMode('expanded'),
     collapse: () => setMode('collapsed'),
     peek: () => setMode('peek'),
+    syncChatCover,
     openLegacyHistory,
   };
 }

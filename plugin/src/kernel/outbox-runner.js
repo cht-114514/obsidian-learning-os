@@ -1,3 +1,5 @@
+import { explicitRetryAllowed } from '../ui/delivery.js';
+
 /**
  * The single outbound path for chat turns.
  *
@@ -50,8 +52,12 @@ export function createOutboxRunner(deps) {
 
   /** @type {Map<string, Promise<any>>} */
   const inFlight = new Map();
+  /** Bumped when the user retries a timed-out send, so the old attempt cannot overwrite it. */
+  const generation = new Map();
   /** @type {Promise<any> | null} */
   let drainTask = null;
+
+  const genOf = (turnId) => generation.get(turnId) || 0;
 
   const connected = () => (deps.isConnected ? !!deps.isConnected() : true);
 
@@ -80,10 +86,13 @@ export function createOutboxRunner(deps) {
   async function deliver(turn) {
     if (!turn?.turnId) return { ok: false, error: new Error('missing turnId') };
     if (inFlight.has(turn.turnId)) return { ok: false, error: new Error('already sending') };
+    const gen = genOf(turn.turnId);
+    const stillCurrent = () => genOf(turn.turnId) === gen;
     // Freeze the transition to `sending` before any network work happens.
     store.markSending(turn.turnId);
     const task = (async () => {
       const result = await send(turn);
+      if (!stillCurrent()) return { ok: false, superseded: true };
       store.markSent(turn.turnId, { runId: result?.runId || '' });
       notify({ kind: 'sent', turn, result });
       return { ok: true, result };
@@ -92,6 +101,7 @@ export function createOutboxRunner(deps) {
     try {
       return await task;
     } catch (error) {
+      if (!stillCurrent()) return { ok: false, superseded: true, error };
       try {
         if (isRetryable(error)) {
           store.markUnknown(turn.turnId, error?.message || '');
@@ -119,7 +129,7 @@ export function createOutboxRunner(deps) {
       }
       return { ok: false, error };
     } finally {
-      inFlight.delete(turn.turnId);
+      if (inFlight.get(turn.turnId) === task) inFlight.delete(turn.turnId);
     }
   }
 
@@ -141,6 +151,7 @@ export function createOutboxRunner(deps) {
           .sort((a, b) => (a.ts || 0) - (b.ts || 0))[0];
         if (!next) return sent;
         const outcome = await deliver(next);
+        if (outcome?.superseded) return sent;
         if (outcome?.ok) sent += 1;
       }
     })();
@@ -178,11 +189,24 @@ export function createOutboxRunner(deps) {
     return store.listPending(sessionKey).filter((row) => row.status === 'unknown');
   }
 
-  /** The user explicitly asks for another attempt. */
-  async function retry(turnId) {
+  /**
+   * The user explicitly asks for another attempt.
+   * A send that has already timed out may be retried; the previous attempt is
+   * ignored if it finishes later. The Mac still sees the same turn id.
+   * @param {string} turnId
+   * @param {number} [now]
+   */
+  async function retry(turnId, now = Date.now()) {
     const turn = store.pendingFor(turnId);
-    if (!turn) return { ok: false, error: new Error('找不到这条消息') };
-    if (turn.status === 'sending') return { ok: false, error: new Error('正在发送中') };
+    const allowed = explicitRetryAllowed(turn, now);
+    if (!allowed.ok) return { ok: false, error: new Error(allowed.reason) };
+    if (turn.status === 'sending') {
+      generation.set(turnId, genOf(turnId) + 1);
+      inFlight.delete(turnId);
+      // The hung attempt still occupies this session's lane. Drop it so the
+      // retry can leave now; the old attempt exits when it notices it was replaced.
+      lanes.delete(turn.sessionKey || '');
+    }
     store.markQueuedForRetry(turnId);
     return flush();
   }

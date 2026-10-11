@@ -257,7 +257,7 @@ export default class MeSoulPlugin extends Plugin {
   }
 
   isChatViewActive() {
-    return this.isChatLeafActive?.() || false;
+    return !!this._chatOpening || this.isChatLeafActive?.() || false;
   }
 
   isDesktopKernelAvailable() {
@@ -703,6 +703,11 @@ export default class MeSoulPlugin extends Plugin {
     if (active?.view?.getViewType?.() !== VIEW_TYPE) {
       this._chatReturnLeaf = active;
     }
+    // Cover the half-screen panel immediately so fullscreen is one view,
+    // not a second copy sitting under the panel.
+    this._chatOpening = true;
+    this.companion?.syncChatCover?.();
+    try {
     const existing = workspace.getLeavesOfType(VIEW_TYPE);
 
     const isSideLeaf = (leaf) => {
@@ -742,6 +747,10 @@ export default class MeSoulPlugin extends Plugin {
     }
     // Command-bar may have queued a /skill — run it in fullscreen chat.
     await leaf.view?.consumeQueuedLaunch?.();
+    } finally {
+      this._chatOpening = false;
+      this.companion?.syncChatCover?.();
+    }
   }
 
   isChatLeafActive() {
@@ -763,6 +772,7 @@ export default class MeSoulPlugin extends Plugin {
     const target = this._chatReturnLeaf;
     if (target && leafAlive(target)) {
       workspace.revealLeaf(target);
+      this.companion?.syncChatCover?.();
       return true;
     }
     const noteLeaf = workspace
@@ -770,6 +780,7 @@ export default class MeSoulPlugin extends Plugin {
       .find((leaf) => leaf !== workspace.activeLeaf && leafAlive(leaf));
     if (noteLeaf) {
       workspace.revealLeaf(noteLeaf);
+      this.companion?.syncChatCover?.();
       return true;
     }
     try {

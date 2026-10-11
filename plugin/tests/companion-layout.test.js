@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nextCompanionMode, placeCard, shouldThawQuote } from '../src/ui/companion/layout.js';
+import { companionPresentation, nextCompanionMode, placeCard, shouldThawQuote } from '../src/ui/companion/layout.js';
 
 const frame = { left: 12, top: 20, width: 366, height: 700 };
 
@@ -83,6 +83,18 @@ test('nextCompanionMode steps one state at a time and ignores keyboard dismissal
   assert.equal(nextCompanionMode('expanded', 'escape'), 'peek');
   assert.equal(nextCompanionMode('peek', 'outside'), 'collapsed');
   assert.equal(nextCompanionMode('expanded', 'keyboard'), 'expanded');
+});
+
+test('fullscreen covers the half-screen panel without changing its mode', () => {
+  const open = companionPresentation({ mode: 'expanded' }, true);
+  assert.equal(open.mode, 'expanded');
+  assert.equal(open.covered, true);
+  assert.equal(open.interactive, false);
+  const back = companionPresentation({ mode: open.mode }, false);
+  assert.equal(back.mode, 'expanded');
+  assert.equal(back.covered, false);
+  assert.equal(back.interactive, true);
+  assert.equal(companionPresentation({ mode: 'peek' }, false).mode, 'peek');
 });
 
 test('shouldThawQuote keeps a draft attached to its frozen selection', () => {

@@ -168,3 +168,21 @@ export function nextCompanionMode(mode, action) {
 export function shouldThawQuote(mode, draft) {
   return mode === 'collapsed' && !String(draft || '').trim();
 }
+
+/**
+ * Fullscreen and the half-screen panel are one conversation.
+ * Opening fullscreen covers the panel; it does not open a second copy.
+ * Mode, draft, and scroll stay put so leaving fullscreen uncovers the same view.
+ *
+ * @param {{ mode?: string }} state
+ * @param {boolean} chatActive
+ */
+export function companionPresentation(state, chatActive) {
+  const mode = state?.mode === 'expanded' || state?.mode === 'peek' ? state.mode : 'collapsed';
+  const covered = !!chatActive;
+  return {
+    mode,
+    covered,
+    interactive: !covered,
+  };
+}

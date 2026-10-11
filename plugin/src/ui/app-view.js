@@ -11,8 +11,9 @@ import { mountSidebar, sessionKey } from './sidebar.js';
 import { mountChatPane } from './chat-pane.js';
 import { mountComposer } from './composer.js';
 import { placeholderFor, renderConnection } from './connection-view.js';
-import { navbarReservePx, resolveMobileKeyboardPx, composerOffsetPx } from './mobile-insets.js';
-import { nextStepFor, phaseLabel } from './turn-phase.js';
+import { bindViewportListeners, navbarReservePx, readShellKeyboard, resolveMobileKeyboardPx, stepKeyboardInset } from './mobile-insets.js';
+import { macLinkLabel } from './delivery.js';
+import { phaseLabel } from './turn-phase.js';
 import { AOS_BUILD } from './build-id.js';
 import { createChatController } from '../kernel/chat-controller.js';
 
@@ -53,12 +54,13 @@ export function mountAgentApp(container, deps) {
     attr: { type: 'button', 'aria-label': '会话' },
   });
   menuBtn.innerHTML = ICON_MENU;
-  const titleEl = top.createDiv({ cls: 'aos-top-title', text: '主会话' });
+  const titleWrap = top.createDiv({ cls: 'aos-top-copy' });
+  const titleEl = titleWrap.createDiv({ cls: 'aos-top-title', text: '主会话' });
+  const macEl = titleWrap.createDiv({ cls: 'aos-mac-link', text: '正在连接 Mac' });
 
   const connection = main.createDiv({ cls: 'aos-connection' });
   const log = main.createDiv({ cls: 'aos-log' });
   const jumpHost = main.createDiv({ cls: 'aos-jump-host' });
-  const composerSpacer = mobile ? main.createDiv({ cls: 'aos-composer-host-spacer' }) : null;
   const composerHost = main.createDiv({ cls: 'aos-composer-host' });
   const ctrl = deps.plugin.ensureChatController();
   ctrl.loadLocalCache();
@@ -75,7 +77,7 @@ export function mountAgentApp(container, deps) {
     get sidebarOpen() { return ui.sidebarOpen; },
     onThread: () => paintThread(),
     onComposerFocus: () => composer?.focus?.(),
-    onCloseSidebar: () => { ui.sidebarOpen = false; hideComposerPortalNow(); },
+    onCloseSidebar: () => { ui.sidebarOpen = false; },
     getDraft: () => composerHost.querySelector('textarea')?.value || '',
   };
   let detachCtrl = () => {};
@@ -111,6 +113,10 @@ export function mountAgentApp(container, deps) {
       state.sidebarOpen = false;
       paintChrome();
       deps.onReturnToNotes?.();
+    },
+    onClose: () => {
+      state.sidebarOpen = false;
+      paintChrome();
     },
   });
 
@@ -148,16 +154,7 @@ export function mountAgentApp(container, deps) {
   detachCtrl = ctrl.attachView(viewHook);
   unsubCtrl = ctrl.subscribe(() => paintChrome());
 
-  let syncComposerPortalAnchor = () => {};
-  function hideComposerPortalNow() {
-    if (!mobile || !composerHost.hasClass('is-portal')) return;
-    composerHost.hidden = true;
-    document.body.classList.remove('aos-chat-active');
-  }
-
-  let unbindPortalLayout = () => {};
-
-  function portalAnchorEl() {
+  function chatAnchorEl() {
     return (
       container.closest?.('.workspace-leaf-content[data-type="me-soul-chat"]') ||
       container.closest?.('.workspace-leaf-content') ||
@@ -165,70 +162,32 @@ export function mountAgentApp(container, deps) {
     );
   }
 
-  function mountComposerPortal() {
-    if (!mobile || composerHost.hasClass('is-portal')) return;
-    composerHost.addClass('is-portal');
-    document.body.appendChild(composerHost);
-    syncComposerPortalAnchor = () => {
-      const anchor = portalAnchorEl();
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
-      composerHost.style.left = `${Math.round(rect.left)}px`;
-      composerHost.style.width = `${Math.round(rect.width)}px`;
-      const height = Math.ceil(composerHost.getBoundingClientRect().height);
-      if (composerSpacer && height > 0) composerSpacer.style.minHeight = `${height}px`;
-    };
-    syncComposerPortalAnchor();
-    const roTargets = [portalAnchorEl(), composerHost].filter(Boolean);
-    if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(() => {
-        syncComposerPortalAnchor();
-      });
-      for (const target of roTargets) observer.observe(target);
-      const onWindow = () => syncComposerPortalAnchor();
-      window.addEventListener('resize', onWindow);
-      window.visualViewport?.addEventListener('resize', onWindow);
-      window.visualViewport?.addEventListener('scroll', onWindow);
-      unbindPortalLayout = () => {
-        observer.disconnect();
-        window.removeEventListener('resize', onWindow);
-        window.visualViewport?.removeEventListener('resize', onWindow);
-        window.visualViewport?.removeEventListener('scroll', onWindow);
-      };
-    }
-  }
-
-  if (mobile) mountComposerPortal();
-
   function chatLeafActive() {
     const leaf = deps.view?.leaf;
     if (leaf && app?.workspace?.activeLeaf) {
       return app.workspace.activeLeaf === leaf;
     }
-    const anchor = portalAnchorEl();
+    const anchor = chatAnchorEl();
     const activeView = app?.workspace?.activeLeaf?.view;
     if (!anchor || !activeView) return true;
     const host = activeView.containerEl || activeView.contentEl;
     return !!(host && (host === container || host.contains(container)));
   }
 
-  function syncComposerPortalVisibility() {
+  function syncChatActive() {
     const active = chatLeafActive();
     document.body.classList.toggle('aos-chat-active', !!(mobile && active));
-    if (!mobile || !composerHost.hasClass('is-portal')) return;
-    composerHost.hidden = !active;
-    if (!composerHost.hidden) syncComposerPortalAnchor();
   }
 
   let unbindLeafWatch = () => {};
   if (mobile && app?.workspace?.on) {
     const onLeaf = () => {
-      syncComposerPortalVisibility();
+      syncChatActive();
       applyNavbar();
     };
     const ref = app.workspace.on('active-leaf-change', onLeaf);
     unbindLeafWatch = () => ref?.();
-    syncComposerPortalVisibility();
+    syncChatActive();
   }
 
   function shouldHideNavbar() {
@@ -321,6 +280,16 @@ export function mountAgentApp(container, deps) {
       },
       onDetails: () => showDiagnosis(),
     });
+    const link = status.mac || macLinkLabel({
+      state: status.state,
+      needsPairing: status.needsPairing,
+      lastSeenAt: status.lastSeenAt || 0,
+      kernel: status.kernel || '',
+      syncing: !!state.sessionsLoading,
+    });
+    macEl.setText(link.text);
+    macEl.className = `aos-mac-link is-${link.tone}`;
+    macEl.setAttr('aria-label', link.text);
     emitTitle();
     applyNavbar();
   }
@@ -387,7 +356,6 @@ export function mountAgentApp(container, deps) {
       root.style.setProperty('--aos-navbar-h', `${navStack}px`);
       root.style.setProperty('--aos-nav-clearance', `${navStack}px`);
     }
-    paintComposerBottomMargin(navStack, hide);
     applyKeyboardInset();
     if (navEl && navStack < 120 && typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => {
@@ -397,69 +365,104 @@ export function mountAgentApp(container, deps) {
         if (next > navStack) {
           root.style.setProperty('--aos-navbar-h', `${next}px`);
           root.style.setProperty('--aos-nav-clearance', `${next}px`);
-          paintComposerBottomMargin(next, hide);
         }
       });
     }
   }
 
-  function paintComposerBottomMargin(navStack, hideNavbar) {
-    if (!mobile) return;
-    const bodyStyle = getComputedStyle(document.body);
-    const keyboard = resolveMobileKeyboardPx(bodyStyle, window.visualViewport, window.innerHeight);
-    let safeBottom = 0;
+  let kbState = { offset: 0, openSince: 0 };
+  let pointerWithin = false;
+  let kbFrame = 0;
+  let openTimer = 0;
+  let disposed = false;
+
+  function composerFocused() {
+    const active = document.activeElement;
+    return !!(active && composerHost.contains(active) && active.matches?.('textarea, input'));
+  }
+
+  function focusWithinComposer() {
+    const active = document.activeElement;
+    return !!(active && composerHost.contains(active));
+  }
+
+  function safeBottomPx() {
     try {
-      const raw = bodyStyle.getPropertyValue('--safe-area-inset-bottom').trim();
+      const raw = getComputedStyle(document.body).getPropertyValue('--safe-area-inset-bottom').trim();
       const parsed = parseFloat(raw);
-      if (Number.isFinite(parsed)) safeBottom = parsed;
+      return Number.isFinite(parsed) ? parsed : 0;
     } catch {
-      /* ignore */
+      return 0;
     }
-    const bottom = `${composerOffsetPx({
-      keyboardPx: keyboard,
-      safeBottom,
-      navStack,
-      hideNavbar,
-    })}px`;
-    composerHost.classList.toggle('is-keyboard', keyboard > 0);
-    if (composerHost.hasClass('is-portal')) {
-      composerHost.style.marginBottom = '0';
-      composerHost.style.bottom = bottom;
-      syncComposerPortalAnchor();
-      return;
-    }
-    composerHost.style.bottom = '';
-    composerHost.style.marginBottom = bottom;
   }
 
   function applyKeyboardInset() {
-    if (!mobile) return;
-    const viewport = window.visualViewport;
-    const bodyStyle = getComputedStyle(document.body);
-    const inset = resolveMobileKeyboardPx(bodyStyle, viewport, window.innerHeight);
-    root.style.setProperty('--aos-keyboard', `${inset}px`);
-    root.classList.toggle('is-keyboard', inset > 0);
-    const hide = shouldHideNavbar();
-    let navStack = 0;
-    if (!hide) {
-      const raw = root.style.getPropertyValue('--aos-navbar-h') || getComputedStyle(root).getPropertyValue('--aos-navbar-h');
-      navStack = parseFloat(raw) || 96;
+    if (!mobile || disposed) return;
+    const focused = composerFocused();
+    const focusWithin = focusWithinComposer();
+    const rect = root.getBoundingClientRect();
+    let cssKeyboard = 0;
+    if (!window.visualViewport && (focused || focusWithin)) {
+      cssKeyboard = resolveMobileKeyboardPx(getComputedStyle(document.body), null, window.innerHeight, { focused: true });
     }
-    paintComposerBottomMargin(navStack, hide);
+    const raw = readShellKeyboard({
+      shellHeight: rect.height,
+      innerHeight: window.innerHeight,
+      viewport: window.visualViewport,
+      safeBottom: safeBottomPx(),
+      focused: focused || focusWithin,
+      cssKeyboard,
+    });
+    const next = stepKeyboardInset(kbState, {
+      now: Date.now(),
+      overlap: raw.overlap,
+      focused,
+      focusWithin,
+      pointerWithin,
+      viewportClosed: !raw.keyboardOpen,
+    });
+    kbState = { offset: next.offset, openSince: next.openSince };
+    if (next.retryIn > 0) {
+      if (!openTimer) openTimer = setTimeout(() => {
+        openTimer = 0;
+        applyKeyboardInset();
+      }, next.retryIn);
+    } else if (openTimer) {
+      clearTimeout(openTimer);
+      openTimer = 0;
+    }
+    if (next.collapse) root.classList.add('is-kb-collapse');
+    else if (next.offset > 0) root.classList.remove('is-kb-collapse');
+    root.style.setProperty('--aos-kb', `${next.offset}px`);
+    root.style.setProperty('--aos-keyboard', `${next.offset}px`);
+    root.classList.toggle('is-keyboard', next.keyboardOpen);
   }
 
-  function bindKeyboard() {
-    const viewport = window.visualViewport;
-    if (!viewport) return () => {};
-    const update = () => applyKeyboardInset();
-    viewport.addEventListener('resize', update);
-    viewport.addEventListener('scroll', update);
-    update();
-    return () => {
-      viewport.removeEventListener('resize', update);
-      viewport.removeEventListener('scroll', update);
+  function scheduleKeyboardInset() {
+    if (kbFrame || disposed) return;
+    const run = () => {
+      kbFrame = 0;
+      applyKeyboardInset();
     };
+    kbFrame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : setTimeout(run, 16);
   }
+
+  composerHost.addEventListener('focusin', () => scheduleKeyboardInset());
+  composerHost.addEventListener('focusout', (event) => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && composerHost.contains(next)) return;
+    scheduleKeyboardInset();
+  });
+  composerHost.addEventListener('pointerdown', () => {
+    pointerWithin = true;
+  }, true);
+  const releasePointer = () => {
+    if (!pointerWithin) return;
+    pointerWithin = false;
+    scheduleKeyboardInset();
+  };
+  composerHost.addEventListener('pointerup', releasePointer, true);
+  composerHost.addEventListener('pointercancel', releasePointer, true);
 
   function bindNavbar() {
     const nav = document.querySelector('.mobile-navbar');
@@ -469,7 +472,7 @@ export function mountAgentApp(container, deps) {
     return () => observer.disconnect();
   }
 
-  const unbindKeyboard = mobile ? bindKeyboard() : () => {};
+  const unbindKeyboard = mobile ? bindViewportListeners(() => applyKeyboardInset()) : () => {};
   const unbindNavbar = mobile ? bindNavbar() : () => {};
 
   function toggleDrawer() {
@@ -486,7 +489,11 @@ export function mountAgentApp(container, deps) {
     state.messages = deps.preview.messages || [];
     state.activeKey = deps.preview.activeKey || sessionKey(state.sessions[0]) || '';
     state.sidebarOpen = !!deps.preview.drawer;
-    if (deps.preview.keyboard) root.style.setProperty('--aos-keyboard', deps.preview.keyboard);
+    if (deps.preview.keyboard) {
+      root.style.setProperty('--aos-kb', deps.preview.keyboard);
+      root.style.setProperty('--aos-keyboard', deps.preview.keyboard);
+      root.classList.toggle('is-keyboard', parseFloat(deps.preview.keyboard) > 0);
+    }
   }
 
   
@@ -520,23 +527,19 @@ export function mountAgentApp(container, deps) {
 
   return {
     destroy() {
+      disposed = true;
       unsubCtrl?.();
       detachCtrl?.();
+      if (kbFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(kbFrame);
+      kbFrame = 0;
+      clearTimeout(openTimer);
+      openTimer = 0;
       unbindKeyboard();
       unbindNavbar();
-      unbindPortalLayout();
       unbindLeafWatch();
       offStatus?.();
       thread.destroy();
       composer.destroy();
-      if (composerHost.hasClass('is-portal')) {
-        composerHost.removeClass('is-portal');
-        composerHost.hidden = false;
-        composerHost.style.left = '';
-        composerHost.style.width = '';
-        composerHost.style.bottom = '';
-        composerHost.remove();
-      }
       document.body.classList.remove('aos-hide-navbar');
       document.body.classList.remove('aos-chat-active');
       document.body.classList.remove('aos-drawer-open');
