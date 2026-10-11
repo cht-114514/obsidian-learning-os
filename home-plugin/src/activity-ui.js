@@ -9,13 +9,7 @@ const {
   recordsForDay,
   serializeActivityJsonl,
 } = require("../activity.js");
-const { DRAFT_DIR, parseDraft, planDraftSave, planTextSave } = require("../drafts.js");
-const { decideArchive, renderArchivePending, parseArchivePending } = require("../archive.js");
-const {
-  archiveLlmConfigFromApp,
-  callArchiveLlm,
-  resolveArchivePath,
-} = require("../archive-llm.js");
+const { newWritingNote } = require("../drafts.js");
 const { freshRound, gradeRound, prosePrompt, skipRound } = require("../review-round.js");
 const {
   appendNextStep,
@@ -41,11 +35,6 @@ const {
 } = require("../review-queue.js");
 
 const ACTIVITY_DIR = "agent-inbox/meinc-home";
-const OUTPUT_PROMPTS = [
-  { label: "解释", text: "用自己的话解释：" },
-  { label: "复述", text: "合上原文，复述：" },
-  { label: "推导", text: "写下推导：" },
-];
 
 function weeksAndDate(now = new Date()) {
   const weeks = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
@@ -62,34 +51,14 @@ function splitFrontmatter(markdown) {
   return { meta: match[0], body: text.slice(match[0].length) };
 }
 
-function allowedTarget(path) {
-  return /^(手记|项目库|基础学科)\/.+\.md$/.test(String(path || "")) && !path.includes("..");
-}
-
-function collectArchiveFolderHints(app) {
-  const roots = ["手记", "项目库", "基础学科"];
-  const skip = new Set(["手记/草稿", "项目库/_模板"]);
-  const hints = [];
-  const walk = (folderPath, depth) => {
-    const folder = app.vault.getAbstractFileByPath(folderPath);
-    if (!(folder instanceof TFolder) || depth > 2) return;
-    for (const child of folder.children) {
-      if (!(child instanceof TFolder)) continue;
-      const path = `${folderPath}/${child.name}`;
-      if (skip.has(path) || path.includes(".trash") || child.name.startsWith(".")) continue;
-      hints.push(path);
-      if (depth < 2) walk(path, depth + 1);
-    }
-  };
-  for (const root of roots) walk(root, 1);
-  return hints;
-}
-
 async function writeText(plugin, path, text) {
   await plugin.ensureFolders(path);
   const file = plugin.app.vault.getAbstractFileByPath(path);
-  if (file instanceof TFile) await plugin.app.vault.modify(file, text);
-  else await plugin.app.vault.create(path, text);
+  if (file instanceof TFile) {
+    await plugin.app.vault.modify(file, text);
+    return file;
+  }
+  return plugin.app.vault.create(path, text);
 }
 
 async function readText(plugin, path) {
@@ -188,7 +157,7 @@ function openContinue(view, item) {
     view.push({ type: "reader", path: item.path, title: item.title });
     return;
   }
-  if (item.path) view.openDraft({ path: item.path, draftId: item.draftId, kind: "writing" });
+  if (item.path) void view.openDraft({ path: item.path, kind: item.event?.kind || "writing" });
 }
 
 function renderLibrary(view, root) {
@@ -361,251 +330,6 @@ async function loadReader(view, page, status, tools) {
     view.plugin.pendingTimeboxSource = screen.path;
     view.plugin.openTimeboxStart({ title: view.readerState.title });
   };
-}
-
-function renderEditor(view, root) {
-  const state = view.editorState;
-  header(view, root, state?.title || "写作", () => {
-    void view.flushEditor().then(() => view.back());
-  });
-  if (!state) {
-    root.createDiv({ cls: "meinc-home-empty", text: "正在打开" });
-    return;
-  }
-  if (state.kind === "output") {
-    const prompts = root.createEl("details", { cls: "meinc-editor-prompts" });
-    prompts.createEl("summary", { text: "需要提示时再打开" });
-    for (const prompt of OUTPUT_PROMPTS) {
-      prompts.createEl("button", { text: prompt.label, attr: { type: "button" } }).onclick = () => {
-        if (!state.body.includes(prompt.text)) {
-          state.body = `${prompt.text}\n${state.body}`;
-          area.value = state.body;
-          scheduleEditorSave(view);
-        }
-      };
-    }
-  }
-  const area = root.createEl("textarea", {
-    cls: "meinc-editor-area",
-    attr: { placeholder: "直接写" },
-  });
-  area.value = state.body || "";
-  const note = root.createDiv({ cls: "meinc-editor-status", text: state.saveError || "" });
-  area.addEventListener("compositionstart", () => {
-    state.composing = true;
-  });
-  area.addEventListener("compositionend", () => {
-    state.composing = false;
-    state.body = area.value;
-    scheduleEditorSave(view);
-  });
-  area.addEventListener("input", () => {
-    state.body = area.value;
-    view.editorSelection = "";
-    if (!state.composing) scheduleEditorSave(view);
-  });
-  area.addEventListener("select", () => {
-    const start = area.selectionStart || 0;
-    const end = area.selectionEnd || 0;
-    view.editorSelection = area.value.slice(start, end);
-  });
-  const actions = root.createDiv({ cls: "meinc-home-empty-actions" });
-  actions.createEl("button", { text: "整理归档", attr: { type: "button" } }).onclick = () => {
-    void requestArchive(view, note);
-  };
-  actions.createEl("button", { text: "加入复习", attr: { type: "button" } }).onclick = () => {
-    void view.plugin.addOutputToReview(state.body);
-    new Notice("已加入复习");
-  };
-  actions.createEl("button", { text: "开始计时", attr: { type: "button" } }).onclick = () => {
-    view.plugin.pendingTimeboxSource = state.path || "";
-    view.plugin.openTimeboxStart({ title: state.title || "写作" });
-  };
-  const card = root.createDiv({ cls: "meinc-archive-card" });
-  view.archiveCardEl = card;
-  if (state.pendingPath) void paintArchiveCard(view, card);
-  view.editorArea = area;
-  view.editorStatus = note;
-}
-
-function scheduleEditorSave(view) {
-  clearTimeout(view._draftTimer);
-  view._draftTimer = setTimeout(() => {
-    void view.flushEditor();
-  }, 600);
-}
-
-async function flushEditor(view) {
-  const state = view.editorState;
-  if (!state || state.composing) return;
-  try {
-    if (state.wrapped) {
-      const decision = planDraftSave({
-        id: state.draftId,
-        kind: state.kind,
-        deviceId: view.plugin.ensureTimeboxDeviceId(),
-        baseHash: state.baseHash,
-        localBody: state.body,
-        diskMarkdown: state.path ? await readText(view.plugin, state.path) : null,
-      });
-      if (decision.action === "unchanged") return;
-      const path = decision.path || state.path;
-      await writeText(view.plugin, path, decision.markdown);
-      state.path = decision.action === "conflict" ? path : state.path || path;
-      state.baseHash = decision.hash;
-      if (decision.action === "conflict") {
-        new Notice("另一端也改过这篇，两份都留着");
-      }
-    } else {
-      const disk = await readText(view.plugin, state.path);
-      const decision = planTextSave({
-        baseHash: state.baseHash,
-        localBody: state.body,
-        diskBody: disk,
-        deviceId: view.plugin.ensureTimeboxDeviceId(),
-        conflictTarget: `${state.path}.conflict-${view.plugin.ensureTimeboxDeviceId()}.md`,
-      });
-      if (decision.action === "unchanged") return;
-      if (decision.action === "conflict") {
-        await writeText(view.plugin, decision.path, state.body);
-        new Notice("另一端也改过这篇，两份都留着");
-      } else {
-        await writeText(view.plugin, state.path, state.body);
-        state.baseHash = decision.hash;
-      }
-    }
-    state.saveError = "";
-    if (view.editorStatus) view.editorStatus.setText("已保存");
-    await view.plugin.appendActivity({
-      id: `draft:${state.draftId || state.path}`,
-      type: "draft",
-      draftId: state.draftId || "",
-      path: state.path,
-      title: state.title || "草稿",
-      kind: state.kind,
-    });
-  } catch (_) {
-    state.saveError = "没保存上";
-    if (view.editorStatus) view.editorStatus.setText("没保存上，字还在这里");
-    new Notice("草稿没保存上，字还在编辑器里");
-  }
-}
-
-async function requestArchive(view, note) {
-  const state = view.editorState;
-  if (!state) return;
-  await view.flushEditor();
-  const body = String(state.body || "").trim();
-  if (!body) {
-    note.setText("先写点什么再归档");
-    new Notice("正文是空的");
-    return;
-  }
-  const hash = contentHash(state.body || "");
-  note.setText("正在看这篇…");
-  if (view.archiveCardEl) {
-    view.archiveCardEl.empty();
-    view.archiveCardEl.createDiv({ text: "正在看这篇…" });
-  }
-
-  const cfg = archiveLlmConfigFromApp(view.plugin.app);
-  if (!cfg.baseUrl || !cfg.apiKey) {
-    note.setText("记忆模型还没配好");
-    new Notice("记忆模型还没配好");
-    if (view.archiveCardEl) {
-      view.archiveCardEl.empty();
-      view.archiveCardEl.createDiv({ text: "在 Agent OS 设置里配好 Embed 或记忆模型 API" });
-    }
-    return;
-  }
-
-  const folderHints = collectArchiveFolderHints(view.plugin.app);
-  const result = await callArchiveLlm({
-    baseUrl: cfg.baseUrl,
-    apiKey: cfg.apiKey,
-    model: cfg.model,
-    body: state.body,
-    folderHints,
-  });
-
-  if (result.skipped || !result.ok) {
-    const msg = result.skipped ? "记忆模型还没配好" : "没能出归档建议";
-    note.setText(msg);
-    new Notice(result.error ? `${msg}：${result.error}` : msg);
-    if (view.archiveCardEl) {
-      view.archiveCardEl.empty();
-      view.archiveCardEl.createDiv({ text: result.error || msg });
-    }
-    state.pendingPath = "";
-    return;
-  }
-
-  const { title } = result.suggestion;
-  let path = result.suggestion.path;
-  path = await resolveArchivePath(path, state.body, (p) => readText(view.plugin, p));
-
-  const pendingPath = `agent-inbox/pending/${dayKeyFromTime(Date.now())}-note-archive-${state.draftId || "note"}.md`;
-  await writeText(
-    view.plugin,
-    pendingPath,
-    renderArchivePending({
-      draftPath: state.path,
-      draftId: state.draftId,
-      hash,
-      proposedTitle: title,
-      proposedPath: path,
-    })
-  );
-  state.pendingPath = pendingPath;
-  state.pendingHash = hash;
-  note.setText("看一下标题和位置，确认后归档");
-  if (view.archiveCardEl) await paintArchiveCard(view, view.archiveCardEl);
-}
-
-async function paintArchiveCard(view, card) {
-  const state = view.editorState;
-  card.empty();
-  if (!state?.pendingPath) return;
-  const pending = parseArchivePending((await readText(view.plugin, state.pendingPath)) || "");
-  card.createDiv({ text: pending.title && pending.path ? `${pending.title} → ${pending.path}` : "还在等归档建议" });
-  const button = card.createEl("button", { text: "确认归档", attr: { type: "button" } });
-  button.disabled = !pending.path;
-  button.onclick = () => void applyArchive(view, pending);
-}
-
-async function applyArchive(view, pending) {
-  const state = view.editorState;
-  const target = pending.path;
-  if (!allowedTarget(target)) {
-    new Notice("位置需要落在手记、项目库或基础学科");
-    return;
-  }
-  const disk = state.path ? await readText(view.plugin, state.path) : state.body;
-  const parsed = state.wrapped ? parseDraft(disk || "") : { body: disk || state.body };
-  const existing = await readText(view.plugin, target);
-  const decision = decideArchive({
-    draftBody: parsed.body,
-    confirmedHash: pending.hash,
-    targetExists: existing != null,
-    targetBody: existing,
-  });
-  if (decision.action === "stale") {
-    new Notice("正文已经变了，需要重新看一遍建议");
-    return;
-  }
-  if (decision.action === "conflict") {
-    new Notice("那个位置已经有不同的内容，没有覆盖");
-    return;
-  }
-  if (decision.action === "write") await writeText(view.plugin, target, decision.body);
-  await view.plugin.appendActivity({
-    id: `draft:${state.draftId || state.path}`,
-    type: "draft",
-    draftId: state.draftId || "",
-    path: state.path,
-    done: true,
-  });
-  new Notice(decision.action === "noop" ? "已经在那里了" : "已归档");
 }
 
 function renderWriting(view, root) {
@@ -1100,16 +824,6 @@ async function askAgent(plugin, prompt) {
 
 function agentContext(view) {
   const screen = view.current();
-  if (screen.type === "editor" && view.editorState) {
-    const body = String(view.editorState.body || "");
-    return {
-      path: view.editorState.path || "",
-      title: view.editorState.title || "草稿",
-      body,
-      selection: view.editorSelection || "",
-      version: contentHash(body),
-    };
-  }
   if (screen.type === "reader" && view.readerState) {
     const body = String(view.readerState.markdown || "");
     return {
@@ -1190,22 +904,6 @@ function install(HomeView, PluginClass) {
       console.error(err);
       this.activityEvents = [];
     }
-    this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "hidden") void this.flushOpenEditors();
-    });
-    this.registerDomEvent(window, "pagehide", () => {
-      void this.flushOpenEditors();
-    });
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
-        void this.flushOpenEditors();
-      })
-    );
-  };
-  plugin.flushOpenEditors = async function flushOpenEditors() {
-    for (const leaf of this.app.workspace.getLeavesOfType("meinc-home")) {
-      if (leaf.view?.flushEditor) await leaf.view.flushEditor();
-    }
   };
 
   const view = HomeView.prototype;
@@ -1220,9 +918,6 @@ function install(HomeView, PluginClass) {
   };
   view.renderReader = function renderReaderScreen(root) {
     renderReader(this, root);
-  };
-  view.renderEditor = function renderEditorScreen(root) {
-    renderEditor(this, root);
   };
   view.renderWritingList = function renderWritingScreen(root) {
     renderWriting(this, root);
@@ -1249,56 +944,41 @@ function install(HomeView, PluginClass) {
   };
   view.openDraft = async function openDraft(opts = {}) {
     const kind = opts.kind || "writing";
-    if (opts.resume && !opts.path) {
+    let path = opts.path || "";
+    if (opts.resume && !path) {
       const latest = (this.plugin.activityEvents || [])
         .filter((event) => event.type === "draft" && !event.done && event.kind === "output")
         .pop();
-      if (latest?.path) opts.path = latest.path;
+      if (latest?.path) path = latest.path;
     }
-    if (opts.path && opts.existing) {
-      const text = (await readText(this.plugin, opts.path)) || "";
-      this.editorState = {
-        path: opts.path,
-        title: opts.path.split("/").pop().replace(/\.md$/, ""),
-        body: text,
-        baseHash: contentHash(text),
-        kind,
-        wrapped: false,
-        draftId: opts.path,
-      };
-    } else if (opts.path) {
-      const raw = (await readText(this.plugin, opts.path)) || "";
-      const parsed = parseDraft(raw);
-      this.editorState = {
-        path: opts.path,
-        draftId: parsed.id || opts.draftId || opts.path,
-        title: "草稿",
-        body: parsed.wrapped ? parsed.body : raw,
-        baseHash: parsed.baseHash || contentHash(parsed.wrapped ? parsed.body : raw),
-        kind: parsed.kind || kind,
-        wrapped: parsed.wrapped,
-        seed: opts.seed || "",
-      };
-      if (opts.seed && !this.editorState.body.includes(opts.seed.trim())) {
-        this.editorState.body = `${opts.seed}${this.editorState.body}`;
+    if (path) {
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        await this.plugin.openFile(existing);
+        return;
       }
-    } else {
-      const id = `d${Date.now().toString(36)}`;
-      this.editorState = {
-        path: `${DRAFT_DIR}/${id}.md`,
-        draftId: id,
-        title: kind === "output" ? "输出" : "草稿",
-        body: opts.seed || "",
-        baseHash: "",
-        kind,
-        wrapped: true,
-      };
+      new Notice("没有找到这篇");
+      return;
     }
-    this.editorSelection = "";
-    this.push({ type: "editor", title: this.editorState.title, path: this.editorState.path });
-  };
-  view.flushEditor = function flush() {
-    return flushEditor(this);
+    const id = `d${Date.now().toString(36)}`;
+    const created = new Date().toISOString();
+    const note = newWritingNote({
+      id,
+      body: opts.seed || "",
+      kind,
+      created,
+      deviceId: this.plugin.ensureTimeboxDeviceId(),
+    });
+    const file = await writeText(this.plugin, note.path, note.markdown);
+    await this.plugin.appendActivity({
+      id: `draft:${id}`,
+      type: "draft",
+      draftId: id,
+      path: note.path,
+      title: kind === "output" ? "输出" : "草稿",
+      kind,
+    });
+    if (file instanceof TFile) await this.plugin.openFile(file);
   };
   view.startStudyRound = function start(opts) {
     return startStudyRound(this, opts);
@@ -1324,22 +1004,8 @@ function install(HomeView, PluginClass) {
     return this.startStudyRound();
   };
   view.refreshListing = function refreshListing() {
-    const type = this.current().type;
-    if (type === "editor" || type === "reader") return;
+    if (this.current().type === "reader") return;
     this.render();
-  };
-  const origBack = view.back;
-  view.back = function back() {
-    if (this.current().type === "editor") {
-      void this.flushEditor().then(() => origBack.call(this));
-      return;
-    }
-    return origBack.call(this);
-  };
-  const origClose = view.onClose;
-  view.onClose = async function onClose() {
-    if (this.flushEditor) await this.flushEditor();
-    return origClose.call(this);
   };
 }
 

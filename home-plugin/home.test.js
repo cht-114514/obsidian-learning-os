@@ -20,7 +20,11 @@ assert(!bundle.includes('require("../compound.js")'));
 assert(!bundle.includes('require("./timebox.js")'));
 assert(!bundle.includes('require("../timebox.js")'));
 assert(bundle.includes("继续做"));
-assert(bundle.includes("整理归档"));
+assert(bundle.includes("手记/草稿"));
+assert(bundle.includes("newWritingNote"));
+assert(bundle.includes("getLeaf"));
+assert(!bundle.includes("整理归档"));
+assert(!bundle.includes("flushEditor"));
 const css = fs.readFileSync(path.join(dir, "styles.css"), "utf8");
 const manifest = JSON.parse(
   fs.readFileSync(path.join(dir, "manifest.json"), "utf8")
@@ -202,7 +206,11 @@ assert(!source.includes("还没有待办"));
 assert(!source.includes("completeTimeboxTodoByTitle"));
 assert(!source.includes('require("./compound.js")'));
 assert(source.includes("继续做"));
-assert(source.includes("整理归档"));
+assert(source.includes("newWritingNote"));
+assert(source.includes("getLeaf"));
+assert(!source.includes("整理归档"));
+assert(!source.includes("function renderEditor"));
+assert(!source.includes("flushEditor"));
 assert(source.includes("getAgentContext"));
 assert(source.includes("手记/草稿"));
 assert(source.includes("registerHonglouRead"));

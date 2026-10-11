@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { contentHash, continueItems, mergeEvents, readingShelves, recordsForDay } = require("./activity.js");
-const { parseDraft, planDraftSave, planTextSave } = require("./drafts.js");
+const { newWritingNote, parseDraft, planDraftSave, planTextSave } = require("./drafts.js");
 const { decideArchive, decideNextWrite, parseArchivePending, renderArchivePending } = require("./archive.js");
 const {
   avoidPathCollision,
@@ -53,6 +53,18 @@ const created = planDraftSave({
 });
 assert.equal(created.action, "write");
 assert.equal(parseDraft(created.markdown).body, "先写这一句");
+assert.equal(created.markdown.includes("\ncreated:"), false);
+
+const note = newWritingNote({
+  id: "d1",
+  body: "先写这一句",
+  kind: "writing",
+  created: "2026-10-11T00:00:00.000Z",
+  deviceId: "phone",
+});
+assert.equal(note.path, "手记/草稿/d1.md");
+assert.match(note.markdown, /^created: 2026-10-11T00:00:00.000Z$/m);
+assert.equal(parseDraft(note.markdown).body, "先写这一句");
 
 const again = planDraftSave({
   id: "d1",
